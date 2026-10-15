@@ -5,6 +5,7 @@ import React, {
 
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,6 +16,8 @@ import {
 import {
   useFocusEffect,
 } from '@react-navigation/native';
+
+import Ionicons from '@expo/vector-icons/Ionicons';
 
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -30,6 +33,11 @@ export default function NotificationsScreen() {
   const [loading, setLoading] = useState(true);
 
   async function loadNotifications() {
+    if (!profile?.id) {
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
 
     const {
@@ -56,20 +64,67 @@ export default function NotificationsScreen() {
   }
 
   async function markAsRead(id) {
+    // Update the UI immediately, then save to Supabase
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+    );
+
     await supabase
       .from('notifications')
       .update({
         is_read: true,
       })
       .eq('id', id);
+  }
 
-    loadNotifications();
+  async function deleteNotification(id) {
+    // Remove from the screen immediately
+    setNotifications((prev) => prev.filter((n) => n.id !== id));
+
+    const { error } = await supabase
+      .from('notifications')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      Alert.alert('Could not delete', error.message);
+      loadNotifications(); // restore the real list
+    }
+  }
+
+  function confirmClearAll() {
+    Alert.alert(
+      'Clear all notifications?',
+      'This will permanently remove all of your notifications.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear all',
+          style: 'destructive',
+          onPress: clearAll,
+        },
+      ]
+    );
+  }
+
+  async function clearAll() {
+    setNotifications([]);
+
+    const { error } = await supabase
+      .from('notifications')
+      .delete()
+      .eq('user_id', profile.id);
+
+    if (error) {
+      Alert.alert('Could not clear', error.message);
+      loadNotifications();
+    }
   }
 
   useFocusEffect(
     useCallback(() => {
       loadNotifications();
-    }, [profile.id])
+    }, [profile?.id])
   );
 
   if (loading) {
@@ -81,10 +136,21 @@ export default function NotificationsScreen() {
   }
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>
-        Notifications
-      </Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+    >
+      <View style={styles.headerRow}>
+        <Text style={styles.title}>
+          Notifications
+        </Text>
+
+        {notifications.length > 0 && (
+          <TouchableOpacity onPress={confirmClearAll}>
+            <Text style={styles.clearAll}>Clear all</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       {notifications.length === 0 ? (
         <Text style={styles.empty}>
@@ -94,6 +160,7 @@ export default function NotificationsScreen() {
         notifications.map((item) => (
           <TouchableOpacity
             key={item.id}
+            activeOpacity={0.8}
             style={[
               styles.card,
               !item.is_read &&
@@ -103,22 +170,33 @@ export default function NotificationsScreen() {
               markAsRead(item.id)
             }
           >
-            <Text style={styles.message}>
-              {item.message ||
-                'PawGuard notification'}
-            </Text>
-
-            {item.dogs?.name && (
-              <Text style={styles.dog}>
-                Pet: {item.dogs.name}
+            <View style={styles.cardBody}>
+              <Text style={styles.message}>
+                {item.message ||
+                  'PawGuard notification'}
               </Text>
-            )}
 
-            <Text style={styles.date}>
-              {new Date(
-                item.created_at
-              ).toLocaleString()}
-            </Text>
+              {item.dogs?.name && (
+                <Text style={styles.dog}>
+                  Pet: {item.dogs.name}
+                </Text>
+              )}
+
+              <Text style={styles.date}>
+                {new Date(
+                  item.created_at
+                ).toLocaleString()}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={styles.closeButton}
+              onPress={() => deleteNotification(item.id)}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              accessibilityLabel="Delete notification"
+            >
+              <Ionicons name="close" size={20} color="#6b7280" />
+            </TouchableOpacity>
           </TouchableOpacity>
         ))
       )}
@@ -129,21 +207,48 @@ export default function NotificationsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
     backgroundColor: '#f5f5f5',
+  },
+
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
   },
 
   title: {
     fontSize: 28,
     fontWeight: '800',
-    marginBottom: 20,
+  },
+
+  clearAll: {
+    color: '#ef4444',
+    fontWeight: '700',
+    fontSize: 14,
   },
 
   card: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
     backgroundColor: '#fff',
     padding: 16,
     borderRadius: 14,
     marginBottom: 10,
+  },
+
+  cardBody: {
+    flex: 1,
+    paddingRight: 8,
+  },
+
+  closeButton: {
+    padding: 2,
   },
 
   unread: {

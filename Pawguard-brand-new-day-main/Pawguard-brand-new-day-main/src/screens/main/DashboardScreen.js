@@ -24,6 +24,7 @@ import { useAuth } from '../../context/AuthContext';
 
 import SensorCard from '../../components/SensorCard';
 import RiskBadge from '../../components/RiskBadge';
+import { registerForPushNotifications } from '../../utils/registerForPush';
 
 /**
  * If the newest reading is older than this, the device is "Offline".
@@ -31,6 +32,16 @@ import RiskBadge from '../../components/RiskBadge';
  * (e.g. device sends every 30s -> 90 seconds)
  */
 const OFFLINE_AFTER_MS = 2 * 60 * 1000;
+
+// How often to refresh the bell's unread count
+const UNREAD_REFRESH_MS = 15 * 1000;
+
+// Don't send another "device offline" notification within this window
+const OFFLINE_NOTIFY_COOLDOWN_MS = 60 * 60 * 1000;
+
+// Remembers the chosen pet across refocus / tab switches
+// (lives outside the component, so it survives remounts)
+let lastSelectedDogId = null;
 
 // Supabase "timestamp without time zone" columns come back without a "Z",
 // which JS would read as LOCAL time and break the offline check.
@@ -62,8 +73,10 @@ export default function DashboardScreen({ navigation }) {
   const [device, setDevice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(Date.now());
+  const [unreadCount, setUnreadCount] = useState(0);
 
   const lastAlertRisk = useRef(null);
+  const offlineNotified = useRef(false);
 
   // ---- Device status -------------------------------------------------
   const lastSeen = toMillis(sensor?.timestamp_utc);
@@ -79,17 +92,42 @@ export default function DashboardScreen({ navigation }) {
     status === 'Online'
       ? '#22a45d'
       : status === 'Offline'
-      ? '#e5484d'
+      ? '#796d6d'
       : '#9aa0a6';
 
   // Don't judge health from stale data
   const riskLevel = isOnline ? calculateHealthRisk(sensor) : 'UNKNOWN';
+
+  // Register this phone for push notifications
+  useEffect(() => {
+    if (profile?.id) registerForPushNotifications(profile.id);
+  }, [profile?.id]);
 
   // Re-check every 5s so the status flips to Offline even if no new data arrives
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(timer);
   }, []);
+
+  // ---- Unread notification count (bell badge) -------------------------
+  const fetchUnreadCount = async () => {
+    if (!profile?.id) return;
+
+    const { count, error } = await supabase
+      .from('notifications')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', profile.id)
+      .eq('is_read', false);
+
+    if (!error) setUnreadCount(count || 0);
+  };
+
+  useEffect(() => {
+    if (!profile?.id) return;
+    fetchUnreadCount();
+    const timer = setInterval(fetchUnreadCount, UNREAD_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [profile?.id]);
 
   // ---- Data loading --------------------------------------------------
   const loadDogData = async (dog) => {
@@ -140,10 +178,11 @@ export default function DashboardScreen({ navigation }) {
 
     setDogs(dogData);
 
-    const currentDog =
-      selectedDog && dogData.find((item) => item.id === selectedDog.id);
+    // Keep the pet the user picked; fall back to the first one
+    const currentDog = dogData.find((item) => item.id === lastSelectedDogId);
     const dogToUse = currentDog || dogData[0];
 
+    lastSelectedDogId = dogToUse.id;
     setSelectedDog(dogToUse);
     await loadDogData(dogToUse);
 
@@ -177,6 +216,8 @@ export default function DashboardScreen({ navigation }) {
   }, [device?.id]);
 
   // ---- Health alerts -------------------------------------------------
+  // Inserting into health_alerts fires a database trigger that creates
+  // the matching row in `notifications` (see the SQL setup).
   const createHealthAlert = async (dog, reading, level) => {
     if (!dog || !reading) return;
     if (level !== 'HIGH' && level !== 'MODERATE') return;
@@ -197,7 +238,11 @@ export default function DashboardScreen({ navigation }) {
     if (error) {
       console.log('HEALTH ALERT ERROR:', error.message);
       lastAlertRisk.current = null; // allow retry
+      return;
     }
+
+    // Give the trigger a moment, then refresh the bell
+    setTimeout(fetchUnreadCount, 800);
   };
 
   useEffect(() => {
@@ -214,11 +259,66 @@ export default function DashboardScreen({ navigation }) {
   // Reset alert dedupe when switching dogs
   useEffect(() => {
     lastAlertRisk.current = null;
+    offlineNotified.current = false;
   }, [selectedDog?.id]);
+
+  // ---- Device offline notification -----------------------------------
+  const createOfflineNotification = async (dog) => {
+    if (!profile?.id) return;
+
+    // Skip if we already notified about this dog recently
+    const since = new Date(
+      Date.now() - OFFLINE_NOTIFY_COOLDOWN_MS
+    ).toISOString();
+
+    const { data: existing } = await supabase
+      .from('notifications')
+      .select('id')
+      .eq('user_id', profile.id)
+      .eq('dog_id', dog.id)
+      .eq('type', 'DEVICE_OFFLINE')
+      .gte('created_at', since)
+      .limit(1);
+
+    if (existing && existing.length > 0) return;
+
+    const { error } = await supabase.from('notifications').insert({
+      user_id: profile.id,
+      dog_id: dog.id,
+      type: 'DEVICE_OFFLINE',
+      message: `${dog.name}'s device has stopped sending data. Check that it is on and charged.`,
+      is_read: false,
+    });
+
+    if (error) {
+      console.log('OFFLINE NOTIFICATION ERROR:', error.message);
+      offlineNotified.current = false; // allow retry
+      return;
+    }
+
+    fetchUnreadCount();
+  };
+
+  useEffect(() => {
+    if (status === 'Online') {
+      offlineNotified.current = false;
+      return;
+    }
+
+    // Only notify when a paired device HAD sent data and then went quiet
+    if (status !== 'Offline' || lastSeen === null) return;
+    if (!selectedDog || offlineNotified.current) return;
+
+    offlineNotified.current = true;
+    createOfflineNotification(selectedDog);
+  }, [status, lastSeen, selectedDog?.id]);
 
   useFocusEffect(
     useCallback(() => {
-      if (profile?.id) loadDashboard();
+      if (profile?.id) {
+        loadDashboard();
+        fetchUnreadCount();
+      }
     }, [profile?.id])
   );
 
@@ -248,49 +348,78 @@ export default function DashboardScreen({ navigation }) {
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
       refreshControl={
-        <RefreshControl refreshing={loading} onRefresh={loadDashboard} />
+        <RefreshControl
+          refreshing={loading}
+          onRefresh={() => {
+            loadDashboard();
+            fetchUnreadCount();
+          }}
+        />
       }
     >
       {/* Header */}
-      <View style={styles.header}>
+      <View style={styles.topHeader}>
         <View>
-          <Text style={styles.greeting}>Hello, {profile?.name}</Text>
+          <Text style={styles.greeting}>Welcome back,</Text>
           <Text style={styles.title}>PawGuard</Text>
         </View>
+
         <TouchableOpacity
-          style={styles.addButton}
-          onPress={() => navigation.navigate('RegisterPet')}
+          style={styles.notificationButton}
+          onPress={() => navigation.navigate('Notifications')}
+          accessibilityLabel={
+            unreadCount > 0
+              ? `Open notifications, ${unreadCount} unread`
+              : 'Open notifications'
+          }
         >
-          <Text style={styles.addButtonText}>+ Add pet</Text>
+          <Ionicons
+            name="notifications-outline"
+            size={25}
+            color="#0F172A"
+          />
+          {unreadCount > 0 && (
+            <View style={styles.badge}>
+              <Text style={styles.badgeText}>
+                {unreadCount > 9 ? '9+' : unreadCount}
+              </Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
 
       {/* Pet selector */}
-      {dogs.length > 1 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.chips}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.chips}
+      >
+        {dogs.map((item) => {
+          const active = selectedDog?.id === item.id;
+          return (
+            <TouchableOpacity
+              key={item.id}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => {
+                lastSelectedDogId = item.id;
+                setSelectedDog(item);
+                loadDogData(item);
+              }}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                {item.name}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+
+        <TouchableOpacity
+          style={[styles.chip, styles.addChip]}
+          onPress={() => navigation.navigate('RegisterPet')}
         >
-          {dogs.map((item) => {
-            const active = selectedDog?.id === item.id;
-            return (
-              <TouchableOpacity
-                key={item.id}
-                style={[styles.chip, active && styles.chipActive]}
-                onPress={() => {
-                  setSelectedDog(item);
-                  loadDogData(item);
-                }}
-              >
-                <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                  {item.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      )}
+          <Text style={styles.chipText}>+ Add pet</Text>
+        </TouchableOpacity>
+      </ScrollView>
 
       {/* Pet card */}
       {selectedDog && (
@@ -429,7 +558,7 @@ const styles = StyleSheet.create({
   },
 
   // Header
-  header: {
+  topHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -446,16 +575,34 @@ const styles = StyleSheet.create({
     color: '#111827',
     marginTop: 2,
   },
-  addButton: {
-    backgroundColor: '#111827',
-    paddingVertical: 9,
-    paddingHorizontal: 14,
-    borderRadius: 20,
+  notificationButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  addButtonText: {
+  badge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: '#ef4444',
+    borderWidth: 2,
+    borderColor: '#f6f7f9',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeText: {
     color: '#fff',
-    fontWeight: '700',
-    fontSize: 13,
+    fontSize: 10,
+    fontWeight: '800',
   },
 
   // Pet chips
@@ -474,6 +621,9 @@ const styles = StyleSheet.create({
   chipActive: {
     backgroundColor: '#111827',
     borderColor: '#111827',
+  },
+  addChip: {
+    borderStyle: 'dashed',
   },
   chipText: {
     fontWeight: '600',

@@ -98,9 +98,9 @@ function MainTabs() {
       />
 
       <Tab.Screen
-        name="Notifications"
-        component={NotificationsScreen}
-        options={{ title: 'Alerts' }}
+        name="Map"
+        component={MapScreen}
+        options={{ title: 'Map' }}
       />
 
       <Tab.Screen
@@ -109,11 +109,6 @@ function MainTabs() {
         options={{ title: 'Settings' }}
       />
 
-      <Tab.Screen
-        name="Map"
-        component={MapScreen}
-        options={{ title: 'Map' }}
-      />
     </Tab.Navigator>
   );
 }
@@ -160,6 +155,11 @@ export default function MainNavigator() {
           title: 'Pair Device',
         }}
       />
+      <Stack.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{ title: 'Notifications' }}
+    />
     </Stack.Navigator>
   );
 }
