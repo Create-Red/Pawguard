@@ -5,6 +5,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import EventOrganizerDashboardScreen from '../screens/event/EventOrganizerDashboardScreen';
 import CreateEventScreen from '../screens/event/CreateEventScreen';
+import ManageEventScreen from '../screens/event/ManageEventScreen';
+import EventMembersScreen from '../screens/event/EventMembersScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -25,6 +27,21 @@ export default function EventOrganizerNavigator() {
         component={CreateEventScreen}
         options={{
           title: 'Create Event',
+        }}
+      />
+
+      <Stack.Screen
+        name="ManageEvent"
+        component={ManageEventScreen}
+        options={{
+          title: 'Manage Event',
+        }}
+      />
+      <Stack.Screen
+        name="EventMembers"
+        component={EventMembersScreen}
+        options={{
+          title: 'Event Members',
         }}
       />
     </Stack.Navigator>

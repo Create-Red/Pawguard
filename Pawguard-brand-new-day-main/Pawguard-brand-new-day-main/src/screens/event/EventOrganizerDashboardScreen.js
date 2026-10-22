@@ -60,7 +60,7 @@ export default function EventOrganizerDashboardScreen({ navigation }) {
 
         <TouchableOpacity
           style={styles.actionCard}
-          onPress={() => navigation.navigate('ManageEvents')}
+          onPress={() => navigation.navigate('ManageEvent')}
         >
           <Text style={styles.actionTitle}>My Events</Text>
           <Text style={styles.actionDescription}>

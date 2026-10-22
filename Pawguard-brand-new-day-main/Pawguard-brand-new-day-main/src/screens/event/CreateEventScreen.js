@@ -41,51 +41,94 @@ export default function CreateEventScreen({ navigation }) {
   const [description, setDescription] = useState('');
   const [venue, setVenue] = useState('');
   const [startDate, setStartDate] = useState(null);
-  // 'date' | 'time' | 'datetime' | null
-  const [pickerMode, setPickerMode] = useState(null);
+  const [endDate, setEndDate] = useState(null);
+
+  // Which field the picker is editing: 'start' | 'end' | null
+  const [pickerTarget, setPickerTarget] = useState(null);
+  // 'date' | 'time' | 'datetime'
+  const [pickerMode, setPickerMode] = useState('date');
   const [saving, setSaving] = useState(false);
 
-  function openPicker() {
+  function closePicker() {
+    setPickerTarget(null);
+  }
+
+  function openPicker(target) {
     if (saving) return;
-    if (!startDate) {
-      // Default to tomorrow at 9:00 AM
+
+    // Tapping the active field again closes its picker
+    if (pickerTarget === target) {
+      closePicker();
+      return;
+    }
+
+    if (target === 'start' && !startDate) {
+      // Default: tomorrow at 9:00 AM
       const d = new Date();
       d.setDate(d.getDate() + 1);
       d.setHours(9, 0, 0, 0);
       setStartDate(d);
     }
+
+    if (target === 'end' && !endDate) {
+      // Default: 2 hours after start (or tomorrow 11:00 AM if no start yet)
+      let d;
+      if (startDate) {
+        d = new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
+      } else {
+        d = new Date();
+        d.setDate(d.getDate() + 1);
+        d.setHours(11, 0, 0, 0);
+      }
+      setEndDate(d);
+    }
+
+    setPickerTarget(target);
     setPickerMode(Platform.OS === 'ios' ? 'datetime' : 'date');
+  }
+
+  function applyValue(target, value) {
+    if (target === 'start') {
+      setStartDate(value);
+      // Keep the end date after the start date
+      if (endDate && endDate <= value) {
+        setEndDate(new Date(value.getTime() + 2 * 60 * 60 * 1000));
+      }
+    } else {
+      setEndDate(value);
+    }
   }
 
   function handlePickerChange(event, selected) {
     // Android: user cancelled
     if (Platform.OS === 'android' && event.type === 'dismissed') {
-      setPickerMode(null);
+      closePicker();
       return;
     }
 
     if (!selected) return;
 
     if (Platform.OS === 'ios') {
-      setStartDate(selected);
+      applyValue(pickerTarget, selected);
       return;
     }
 
     // Android: pick the date first, then the time
+    const current = (pickerTarget === 'start' ? startDate : endDate) || selected;
+    const merged = new Date(current);
+
     if (pickerMode === 'date') {
-      const merged = new Date(startDate || selected);
       merged.setFullYear(
         selected.getFullYear(),
         selected.getMonth(),
         selected.getDate()
       );
-      setStartDate(merged);
+      applyValue(pickerTarget, merged);
       setPickerMode('time');
     } else {
-      const merged = new Date(startDate || selected);
       merged.setHours(selected.getHours(), selected.getMinutes(), 0, 0);
-      setStartDate(merged);
-      setPickerMode(null);
+      applyValue(pickerTarget, merged);
+      closePicker();
     }
   }
 
@@ -106,10 +149,10 @@ export default function CreateEventScreen({ navigation }) {
       return;
     }
 
-    if (!name.trim() || !venue.trim() || !startDate) {
+    if (!name.trim() || !venue.trim() || !startDate || !endDate) {
       Alert.alert(
         'Missing Information',
-        'Please enter the event name, venue, and start date.'
+        'Please enter the event name, venue, start date, and end date.'
       );
       return;
     }
@@ -118,6 +161,14 @@ export default function CreateEventScreen({ navigation }) {
       Alert.alert(
         'Invalid Date',
         'The start date and time must be in the future.'
+      );
+      return;
+    }
+
+    if (endDate <= startDate) {
+      Alert.alert(
+        'Invalid Schedule',
+        'The end date and time must be later than the start date and time.'
       );
       return;
     }
@@ -133,6 +184,7 @@ export default function CreateEventScreen({ navigation }) {
           description: description.trim() || null,
           venue: venue.trim(),
           starts_at: startDate.toISOString(),
+          ends_at: endDate.toISOString(),
           status: 'open',
         })
         .select()
@@ -168,6 +220,30 @@ export default function CreateEventScreen({ navigation }) {
     } finally {
       setSaving(false);
     }
+  }
+
+  function renderPicker(target) {
+    if (pickerTarget !== target) return null;
+
+    const value = (target === 'start' ? startDate : endDate) || new Date();
+    const minimumDate = target === 'end' && startDate ? startDate : new Date();
+
+    return (
+      <View style={Platform.OS === 'ios' ? styles.iosPickerWrap : null}>
+        <DateTimePicker
+          value={value}
+          mode={pickerMode}
+          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+          minimumDate={minimumDate}
+          onChange={handlePickerChange}
+        />
+        {Platform.OS === 'ios' && (
+          <TouchableOpacity style={styles.pickerDone} onPress={closePicker}>
+            <Text style={styles.pickerDoneText}>Done</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    );
   }
 
   return (
@@ -219,7 +295,7 @@ export default function CreateEventScreen({ navigation }) {
         <Text style={styles.label}>Start Date and Time *</Text>
         <TouchableOpacity
           style={styles.dateButton}
-          onPress={openPicker}
+          onPress={() => openPicker('start')}
           activeOpacity={0.7}
           disabled={saving}
         >
@@ -229,29 +305,32 @@ export default function CreateEventScreen({ navigation }) {
               !startDate && styles.datePlaceholder,
             ]}
           >
-            {startDate ? formatDateTime(startDate) : 'Tap to choose date and time'}
+            {startDate
+              ? formatDateTime(startDate)
+              : 'Tap to choose start date and time'}
           </Text>
         </TouchableOpacity>
+        {renderPicker('start')}
 
-        {pickerMode && (
-          <View style={Platform.OS === 'ios' ? styles.iosPickerWrap : null}>
-            <DateTimePicker
-              value={startDate || new Date()}
-              mode={pickerMode}
-              display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-              minimumDate={new Date()}
-              onChange={handlePickerChange}
-            />
-            {Platform.OS === 'ios' && (
-              <TouchableOpacity
-                style={styles.pickerDone}
-                onPress={() => setPickerMode(null)}
-              >
-                <Text style={styles.pickerDoneText}>Done</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        <Text style={styles.label}>End Date and Time *</Text>
+        <TouchableOpacity
+          style={styles.dateButton}
+          onPress={() => openPicker('end')}
+          activeOpacity={0.7}
+          disabled={saving}
+        >
+          <Text
+            style={[
+              styles.dateButtonText,
+              !endDate && styles.datePlaceholder,
+            ]}
+          >
+            {endDate
+              ? formatDateTime(endDate)
+              : 'Tap to choose end date and time'}
+          </Text>
+        </TouchableOpacity>
+        {renderPicker('end')}
 
         <TouchableOpacity
           style={[styles.button, saving && styles.disabledButton]}

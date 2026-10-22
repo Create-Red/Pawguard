@@ -17,6 +17,7 @@ import EditPetScreen from '../screens/onboarding/EditPetScreen';
 import DogProfileScreen from '../screens/main/DogProfileScreen';
 import PairDeviceScreen from '../screens/onboarding/PairDeviceScreen';
 import MapScreen from '../screens/main/MapScreen';
+import EventsScreen from '../screens/event/EventsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -108,7 +109,14 @@ function MainTabs() {
         component={SettingsScreen}
         options={{ title: 'Settings' }}
       />
-
+      <Tab.Screen
+        name="Events"
+        component={EventsScreen}
+        options={{
+          title: 'Events',
+          tabBarLabel: 'Events',
+        }}
+      />
     </Tab.Navigator>
   );
 }
