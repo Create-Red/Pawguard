@@ -182,6 +182,18 @@ export default function ManageEventsScreen({ navigation }) {
             </Text>
           </TouchableOpacity>
 
+          <TouchableOpacity
+            style={styles.button}
+            onPress={() =>
+              navigation.navigate('EventMonitoring', {
+                eventId: item.id,
+                eventName: item.name,
+              })
+            }
+          >
+            <Text style={styles.buttonText}>Monitor Dogs</Text>
+          </TouchableOpacity>
+
           {item.status === 'open' && (
             <TouchableOpacity
               style={styles.secondaryAction}

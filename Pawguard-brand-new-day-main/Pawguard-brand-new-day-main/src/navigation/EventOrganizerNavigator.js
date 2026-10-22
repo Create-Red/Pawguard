@@ -7,6 +7,7 @@ import EventOrganizerDashboardScreen from '../screens/event/EventOrganizerDashbo
 import CreateEventScreen from '../screens/event/CreateEventScreen';
 import ManageEventScreen from '../screens/event/ManageEventScreen';
 import EventMembersScreen from '../screens/event/EventMembersScreen';
+import EventMonitoringScreen from '../screens/event/EventMonitoringScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -42,6 +43,13 @@ export default function EventOrganizerNavigator() {
         component={EventMembersScreen}
         options={{
           title: 'Event Members',
+        }}
+      />
+      <Stack.Screen
+        name="EventMonitoring"
+        component={EventMonitoringScreen}
+        options={{
+          title: 'Event Monitoring',
         }}
       />
     </Stack.Navigator>

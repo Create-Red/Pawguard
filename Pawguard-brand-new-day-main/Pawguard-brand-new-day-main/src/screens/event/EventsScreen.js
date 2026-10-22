@@ -14,35 +14,68 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 
-export default function EventsScreen({ navigation }) {
+export default function EventsScreen() {
   const { user } = useAuth();
 
   const [events, setEvents] = useState([]);
+  const [registrations, setRegistrations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [joiningId, setJoiningId] = useState(null);
 
   const loadEvents = useCallback(async () => {
+    if (!user) {
+      setEvents([]);
+      setRegistrations([]);
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
+
     try {
-      const { data, error } = await supabase
-        .from('events')
-        .select(
-          'id, organizer_id, name, description, venue, starts_at, ends_at, status'
-        )
-        .eq('status', 'open')
-        .order('starts_at', { ascending: true });
+      const [eventsResult, registrationsResult] = await Promise.all([
+        supabase
+          .from('events')
+          .select(
+            'id, organizer_id, name, description, venue, starts_at, ends_at, status'
+          )
+          .eq('status', 'open')
+          .order('starts_at', { ascending: true }),
 
-      if (error) throw error;
+        supabase
+          .from('event_members')
+          .select(`
+            id,
+            event_id,
+            dog_id,
+            owner_id,
+            status,
+            joined_at,
+            dogs!event_members_dog_id_fkey (
+              id,
+              name
+            )
+          `)
+          .eq('owner_id', user.id)
+          .order('joined_at', { ascending: false }),
+      ]);
 
-      setEvents(data || []);
+      if (eventsResult.error) throw eventsResult.error;
+      if (registrationsResult.error) throw registrationsResult.error;
+
+      setEvents(eventsResult.data || []);
+      setRegistrations(registrationsResult.data || []);
     } catch (error) {
-      console.error('Load events error:', error);
-      Alert.alert('Unable to load events', error.message);
+      console.error('Load events and registrations error:', error);
+      Alert.alert(
+        'Unable to load events',
+        error.message || 'Please refresh and try again.'
+      );
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, []);
+  }, [user]);
 
   useFocusEffect(
     useCallback(() => {
@@ -59,13 +92,12 @@ export default function EventsScreen({ navigation }) {
     try {
       setJoiningId(event.id);
 
-      // Load only dogs owned by the signed-in user.
-      const { data: dogs, error: dogsError } = await supabase
+      const { data: dogs, error } = await supabase
         .from('dogs')
         .select('id, name')
         .eq('owner_id', user.id);
 
-      if (dogsError) throw dogsError;
+      if (error) throw error;
 
       if (!dogs || dogs.length === 0) {
         Alert.alert(
@@ -88,7 +120,10 @@ export default function EventsScreen({ navigation }) {
       );
     } catch (error) {
       console.error('Prepare event registration error:', error);
-      Alert.alert('Error', error.message || 'Unable to select a dog.');
+      Alert.alert(
+        'Error',
+        error.message || 'Unable to select a dog.'
+      );
     } finally {
       setJoiningId(null);
     }
@@ -98,25 +133,40 @@ export default function EventsScreen({ navigation }) {
     try {
       setJoiningId(event.id);
 
-      // Prevent duplicate requests for the same dog and event.
-      const { data: existing, error: existingError } = await supabase
+      const existing = registrations.find(
+        (registration) =>
+          registration.event_id === event.id &&
+          registration.dog_id === dog.id
+      );
+
+      if (existing) {
+        Alert.alert(
+          'Already registered',
+          `${dog.name} already has a ${existing.status} registration for this event.`
+        );
+        return;
+      }
+
+      // Also check the database in case another screen created a request.
+      const { data: existingRequest, error: checkError } = await supabase
         .from('event_members')
         .select('id, status')
         .eq('event_id', event.id)
         .eq('dog_id', dog.id)
         .maybeSingle();
 
-      if (existingError) throw existingError;
+      if (checkError) throw checkError;
 
-      if (existing) {
+      if (existingRequest) {
         Alert.alert(
           'Already registered',
-          `This dog's request is already ${existing.status}.`
+          `${dog.name}'s request is ${existingRequest.status}.`
         );
+        await loadEvents();
         return;
       }
 
-      const { error } = await supabase
+      const { error: insertError } = await supabase
         .from('event_members')
         .insert({
           event_id: event.id,
@@ -125,12 +175,14 @@ export default function EventsScreen({ navigation }) {
           status: 'pending',
         });
 
-      if (error) throw error;
+      if (insertError) throw insertError;
 
       Alert.alert(
         'Request submitted',
         `${dog.name}'s request to join ${event.name} is pending organizer approval.`
       );
+
+      await loadEvents();
     } catch (error) {
       console.error('Join event error:', error);
       Alert.alert(
@@ -142,20 +194,35 @@ export default function EventsScreen({ navigation }) {
     }
   };
 
+  const getEventRegistrations = (eventId) =>
+    registrations.filter((registration) => registration.event_id === eventId);
+
+  const getStatusStyle = (status) => {
+    switch (status) {
+      case 'approved':
+        return styles.approvedBadge;
+      case 'rejected':
+        return styles.rejectedBadge;
+      case 'withdrawn':
+        return styles.withdrawnBadge;
+      default:
+        return styles.pendingBadge;
+    }
+  };
+
   const renderEvent = ({ item }) => {
     const isPast = new Date(item.ends_at).getTime() < Date.now();
     const isJoining = joiningId === item.id;
+    const eventRegistrations = getEventRegistrations(item.id);
 
     return (
       <View style={styles.card}>
         <Text style={styles.eventName}>{item.name}</Text>
-
         <Text style={styles.venue}>📍 {item.venue}</Text>
 
         <Text style={styles.date}>
           Starts: {new Date(item.starts_at).toLocaleString()}
         </Text>
-
         <Text style={styles.date}>
           Ends: {new Date(item.ends_at).toLocaleString()}
         </Text>
@@ -163,6 +230,41 @@ export default function EventsScreen({ navigation }) {
         {item.description ? (
           <Text style={styles.description}>{item.description}</Text>
         ) : null}
+
+        {eventRegistrations.length > 0 && (
+          <View style={styles.registrationSection}>
+            <Text style={styles.registrationHeading}>
+              Your registrations
+            </Text>
+
+            {eventRegistrations.map((registration) => (
+              <View
+                key={registration.id}
+                style={styles.registrationRow}
+              >
+                <View style={styles.registrationInfo}>
+                  <Text style={styles.dogName}>
+                    {registration.dogs?.name || 'Registered dog'}
+                  </Text>
+                  <Text style={styles.statusLabel}>
+                    Registration status
+                  </Text>
+                </View>
+
+                <View
+                  style={[
+                    styles.statusBadge,
+                    getStatusStyle(registration.status),
+                  ]}
+                >
+                  <Text style={styles.statusText}>
+                    {(registration.status || 'pending').toUpperCase()}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
 
         {isPast ? (
           <Text style={styles.closedText}>This event has ended.</Text>
@@ -196,7 +298,7 @@ export default function EventsScreen({ navigation }) {
     <View style={styles.container}>
       <Text style={styles.title}>Upcoming Events</Text>
       <Text style={styles.subtitle}>
-        Find an event and register your dog.
+        Browse events and track your dog's registration status.
       </Text>
 
       <FlatList
@@ -290,6 +392,62 @@ const styles = StyleSheet.create({
     color: '#444444',
     marginTop: 12,
     lineHeight: 20,
+  },
+  registrationSection: {
+    marginTop: 16,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8E4',
+  },
+  registrationHeading: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#183D2B',
+    marginBottom: 10,
+  },
+  registrationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F2F0',
+  },
+  registrationInfo: {
+    flex: 1,
+  },
+  dogName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#263D31',
+  },
+  statusLabel: {
+    color: '#777777',
+    fontSize: 12,
+    marginTop: 3,
+  },
+  statusBadge: {
+    borderRadius: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+  },
+  pendingBadge: {
+    backgroundColor: '#FFF0C2',
+  },
+  approvedBadge: {
+    backgroundColor: '#D9F3E3',
+  },
+  rejectedBadge: {
+    backgroundColor: '#FCE0E0',
+  },
+  withdrawnBadge: {
+    backgroundColor: '#E8E8E8',
+  },
+  statusText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#333333',
   },
   joinButton: {
     backgroundColor: '#237A57',
