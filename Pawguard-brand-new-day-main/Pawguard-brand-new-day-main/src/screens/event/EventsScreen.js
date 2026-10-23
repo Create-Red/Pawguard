@@ -3,10 +3,13 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  LayoutAnimation,
+  Platform,
   RefreshControl,
   StyleSheet,
   Text,
   TouchableOpacity,
+  UIManager,
   View,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
@@ -14,6 +17,13 @@ import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
+
+if (
+  Platform.OS === 'android' &&
+  UIManager.setLayoutAnimationEnabledExperimental
+) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 // Registration status -> card colour. Priority decides which one the card shows.
 const STATUS_ORDER = ['approved', 'pending', 'rejected', 'withdrawn'];
@@ -37,14 +47,6 @@ const formatLongDate = (value) =>
     year: 'numeric',
   });
 
-const formatShortDateTime = (value) =>
-  new Date(value).toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-
 export default function EventsScreen() {
   const { user } = useAuth();
 
@@ -54,6 +56,12 @@ export default function EventsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [joiningId, setJoiningId] = useState(null);
   const [filter, setFilter] = useState('all');
+  const [expandedId, setExpandedId] = useState(null); // one open card at a time
+
+  const toggleExpanded = (id) => {
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setExpandedId((current) => (current === id ? null : id));
+  };
 
   const loadEvents = useCallback(async () => {
     if (!user) {
@@ -238,6 +246,7 @@ export default function EventsScreen() {
   const renderEvent = ({ item }) => {
     const isPast = new Date(item.ends_at).getTime() < Date.now();
     const isJoining = joiningId === item.id;
+    const isOpen = expandedId === item.id;
     const eventRegistrations = getEventRegistrations(item.id);
 
     const overall = getOverallStatus(eventRegistrations);
@@ -245,98 +254,109 @@ export default function EventsScreen() {
 
     return (
       <View style={[styles.card, { backgroundColor: tone.bg }]}>
-        <View style={styles.cardTop}>
-          <Text style={[styles.cardDate, { color: tone.sub }]}>
-            {formatLongDate(item.starts_at)}
-          </Text>
-          <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
-            <Text style={[styles.statusPillText, { color: tone.pillText }]}>
-              {overall || (isPast ? 'ended' : 'open')}
+        {/* Always visible: date, status, title, location */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          onPress={() => toggleExpanded(item.id)}
+          accessibilityRole="button"
+          accessibilityState={{ expanded: isOpen }}
+          accessibilityLabel={`${item.name}, ${isOpen ? 'hide' : 'show'} details`}
+        >
+          <View style={styles.cardTop}>
+            <Text style={[styles.cardDate, { color: tone.sub }]}>
+              {formatLongDate(item.starts_at)}
             </Text>
+            <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
+              <Text style={[styles.statusPillText, { color: tone.pillText }]}>
+                {overall || (isPast ? 'ended' : 'open')}
+              </Text>
+            </View>
           </View>
-        </View>
 
-        <Text style={[styles.eventName, { color: tone.text }]}>
-          {item.name}
-        </Text>
-
-        <View style={styles.venueRow}>
-          <Ionicons name="location-outline" size={15} color={tone.sub} />
-          <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
-            {item.venue}
-          </Text>
-        </View>
-
-        {item.description ? (
           <Text
-            style={[styles.description, { color: tone.text }]}
-            numberOfLines={3}
+            style={[styles.eventName, { color: tone.text }]}
+            numberOfLines={2}
           >
-            {item.description}
+            {item.name}
           </Text>
-        ) : null}
 
-        <View style={styles.tiles}>
-          <View style={styles.tile}>
-            <Text style={styles.tileLabel}>Starts</Text>
-            <Text style={styles.tileValue}>
-              {formatShortDateTime(item.starts_at)}
-            </Text>
-          </View>
-          <View style={styles.tile}>
-            <Text style={styles.tileLabel}>Ends</Text>
-            <Text style={styles.tileValue}>
-              {formatShortDateTime(item.ends_at)}
-            </Text>
-          </View>
-        </View>
-
-        {eventRegistrations.length > 0 && (
-          <View style={styles.registrationSection}>
-            <Text style={[styles.registrationHeading, { color: tone.text }]}>
-              Your registrations
+          <View style={styles.venueRow}>
+            <Ionicons name="location-outline" size={15} color={tone.sub} />
+            <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
+              {item.venue}
             </Text>
 
-            {eventRegistrations.map((registration) => {
-              const status = registration.status || 'pending';
-              const regTone = tones[STATUS_TONE[status]] || tones.beige;
-
-              return (
-                <View key={registration.id} style={styles.registrationRow}>
-                  <Text
-                    style={[styles.dogName, { color: tone.text }]}
-                    numberOfLines={1}
-                  >
-                    {registration.dogs?.name || 'Registered dog'}
-                  </Text>
-
-                  <View style={styles.regPill}>
-                    <Text style={[styles.regPillText, { color: regTone.pillText }]}>
-                      {status}
-                    </Text>
-                  </View>
-                </View>
-              );
-            })}
+            <View style={styles.chevron}>
+              <Ionicons
+                name={isOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color={tone.text}
+              />
+            </View>
           </View>
-        )}
+        </TouchableOpacity>
 
-        {isPast ? (
-          <Text style={[styles.closedText, { color: tone.sub }]}>
-            This event has ended.
-          </Text>
-        ) : (
-          <TouchableOpacity
-            style={styles.joinButton}
-            disabled={!!joiningId}
-            onPress={() => joinEvent(item)}
-          >
-            {isJoining ? (
-              <ActivityIndicator color={colors.white} />
-            ) : (
-              <Text style={styles.joinButtonText}>Register a dog</Text>
+        {/* Drop-down: description, registrations, action */}
+        {isOpen && (
+          <View style={styles.details}>
+            <View style={styles.divider} />
+
+            {item.description ? (
+              <Text style={[styles.description, { color: tone.text }]}>
+                {item.description}
+              </Text>
+            ) : null}
+
+            {eventRegistrations.length > 0 && (
+              <View style={styles.registrationSection}>
+                <Text style={[styles.registrationHeading, { color: tone.text }]}>
+                  Your registrations
+                </Text>
+
+                {eventRegistrations.map((registration) => {
+                  const status = registration.status || 'pending';
+                  const regTone = tones[STATUS_TONE[status]] || tones.beige;
+
+                  return (
+                    <View key={registration.id} style={styles.registrationRow}>
+                      <Text
+                        style={[styles.dogName, { color: tone.text }]}
+                        numberOfLines={1}
+                      >
+                        {registration.dogs?.name || 'Registered dog'}
+                      </Text>
+
+                      <View style={styles.regPill}>
+                        <Text
+                          style={[styles.regPillText, { color: regTone.pillText }]}
+                        >
+                          {status}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })}
+              </View>
             )}
-          </TouchableOpacity>
+
+            {isPast ? (
+              <Text style={[styles.closedText, { color: tone.sub }]}>
+                This event has ended.
+              </Text>
+            ) : (
+              <TouchableOpacity
+                style={styles.joinButton}
+                disabled={!!joiningId}
+                onPress={() => joinEvent(item)}
+              >
+                {isJoining ? (
+                  <ActivityIndicator color={colors.white} />
+                ) : (
+                  <Text style={styles.joinButtonText}>Register a dog</Text>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
         )}
       </View>
     );
@@ -508,45 +528,37 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    marginTop: 6,
+    marginTop: 8,
   },
   venue: {
     flex: 1,
     fontFamily: fonts.regular,
     fontSize: 14,
   },
-  description: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 20,
-    opacity: 0.8,
-    marginTop: 12,
+  chevron: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginLeft: 8,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
-  // Starts / Ends tiles
-  tiles: {
-    flexDirection: 'row',
-    gap: 8,
+  // Drop-down
+  details: {
     marginTop: 16,
   },
-  tile: {
-    flex: 1,
-    backgroundColor: 'rgba(255,255,255,0.6)',
-    borderRadius: 18,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
+  divider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: 'rgba(0,0,0,0.15)',
   },
-  tileLabel: {
+  description: {
     fontFamily: fonts.regular,
-    fontSize: 12,
-    letterSpacing: 0.6,
-    color: colors.tileLabel,
-  },
-  tileValue: {
-    fontFamily: fonts.medium,
     fontSize: 14,
-    color: colors.ink,
-    marginTop: 2,
+    lineHeight: 22,
+    opacity: 0.85,
+    marginTop: 16,
   },
 
   // Registrations

@@ -71,6 +71,9 @@ function MainTabs() {
             case 'Map':
               iconName = focused ? 'map' : 'map-outline';
               break;
+            case 'Events':
+              iconName = focused ? 'calendar' : 'calendar-outline';
+              break;
 
             default:
               iconName = 'ellipse-outline';
