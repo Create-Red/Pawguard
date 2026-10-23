@@ -1,4 +1,3 @@
-
 import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,9 +9,41 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { colors, fonts, tones } from '../../Theme';
+
+// Registration status -> card colour. Priority decides which one the card shows.
+const STATUS_ORDER = ['approved', 'pending', 'rejected', 'withdrawn'];
+const STATUS_TONE = {
+  approved: 'green',
+  pending: 'amber',
+  rejected: 'salmon',
+  withdrawn: 'beige',
+};
+
+const FILTERS = [
+  { key: 'all', label: 'all' },
+  { key: 'pending', label: 'pending' },
+  { key: 'approved', label: 'approved' },
+];
+
+const formatLongDate = (value) =>
+  new Date(value).toLocaleDateString([], {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+const formatShortDateTime = (value) =>
+  new Date(value).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
 
 export default function EventsScreen() {
   const { user } = useAuth();
@@ -22,6 +53,7 @@ export default function EventsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [joiningId, setJoiningId] = useState(null);
+  const [filter, setFilter] = useState('all');
 
   const loadEvents = useCallback(async () => {
     if (!user) {
@@ -120,10 +152,7 @@ export default function EventsScreen() {
       );
     } catch (error) {
       console.error('Prepare event registration error:', error);
-      Alert.alert(
-        'Error',
-        error.message || 'Unable to select a dog.'
-      );
+      Alert.alert('Error', error.message || 'Unable to select a dog.');
     } finally {
       setJoiningId(null);
     }
@@ -185,10 +214,7 @@ export default function EventsScreen() {
       await loadEvents();
     } catch (error) {
       console.error('Join event error:', error);
-      Alert.alert(
-        'Registration failed',
-        error.message || 'Please try again.'
-      );
+      Alert.alert('Registration failed', error.message || 'Please try again.');
     } finally {
       setJoiningId(null);
     }
@@ -197,77 +223,108 @@ export default function EventsScreen() {
   const getEventRegistrations = (eventId) =>
     registrations.filter((registration) => registration.event_id === eventId);
 
-  const getStatusStyle = (status) => {
-    switch (status) {
-      case 'approved':
-        return styles.approvedBadge;
-      case 'rejected':
-        return styles.rejectedBadge;
-      case 'withdrawn':
-        return styles.withdrawnBadge;
-      default:
-        return styles.pendingBadge;
-    }
-  };
+  const getOverallStatus = (eventRegistrations) =>
+    STATUS_ORDER.find((status) =>
+      eventRegistrations.some((r) => (r.status || 'pending') === status)
+    ) || null;
+
+  const visibleEvents = events.filter((event) => {
+    if (filter === 'all') return true;
+    return getEventRegistrations(event.id).some(
+      (r) => (r.status || 'pending') === filter
+    );
+  });
 
   const renderEvent = ({ item }) => {
     const isPast = new Date(item.ends_at).getTime() < Date.now();
     const isJoining = joiningId === item.id;
     const eventRegistrations = getEventRegistrations(item.id);
 
-    return (
-      <View style={styles.card}>
-        <Text style={styles.eventName}>{item.name}</Text>
-        <Text style={styles.venue}>📍 {item.venue}</Text>
+    const overall = getOverallStatus(eventRegistrations);
+    const tone = tones[STATUS_TONE[overall]] || tones.beige;
 
-        <Text style={styles.date}>
-          Starts: {new Date(item.starts_at).toLocaleString()}
+    return (
+      <View style={[styles.card, { backgroundColor: tone.bg }]}>
+        <View style={styles.cardTop}>
+          <Text style={[styles.cardDate, { color: tone.sub }]}>
+            {formatLongDate(item.starts_at)}
+          </Text>
+          <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
+            <Text style={[styles.statusPillText, { color: tone.pillText }]}>
+              {overall || (isPast ? 'ended' : 'open')}
+            </Text>
+          </View>
+        </View>
+
+        <Text style={[styles.eventName, { color: tone.text }]}>
+          {item.name}
         </Text>
-        <Text style={styles.date}>
-          Ends: {new Date(item.ends_at).toLocaleString()}
-        </Text>
+
+        <View style={styles.venueRow}>
+          <Ionicons name="location-outline" size={15} color={tone.sub} />
+          <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
+            {item.venue}
+          </Text>
+        </View>
 
         {item.description ? (
-          <Text style={styles.description}>{item.description}</Text>
+          <Text
+            style={[styles.description, { color: tone.text }]}
+            numberOfLines={3}
+          >
+            {item.description}
+          </Text>
         ) : null}
+
+        <View style={styles.tiles}>
+          <View style={styles.tile}>
+            <Text style={styles.tileLabel}>Starts</Text>
+            <Text style={styles.tileValue}>
+              {formatShortDateTime(item.starts_at)}
+            </Text>
+          </View>
+          <View style={styles.tile}>
+            <Text style={styles.tileLabel}>Ends</Text>
+            <Text style={styles.tileValue}>
+              {formatShortDateTime(item.ends_at)}
+            </Text>
+          </View>
+        </View>
 
         {eventRegistrations.length > 0 && (
           <View style={styles.registrationSection}>
-            <Text style={styles.registrationHeading}>
+            <Text style={[styles.registrationHeading, { color: tone.text }]}>
               Your registrations
             </Text>
 
-            {eventRegistrations.map((registration) => (
-              <View
-                key={registration.id}
-                style={styles.registrationRow}
-              >
-                <View style={styles.registrationInfo}>
-                  <Text style={styles.dogName}>
+            {eventRegistrations.map((registration) => {
+              const status = registration.status || 'pending';
+              const regTone = tones[STATUS_TONE[status]] || tones.beige;
+
+              return (
+                <View key={registration.id} style={styles.registrationRow}>
+                  <Text
+                    style={[styles.dogName, { color: tone.text }]}
+                    numberOfLines={1}
+                  >
                     {registration.dogs?.name || 'Registered dog'}
                   </Text>
-                  <Text style={styles.statusLabel}>
-                    Registration status
-                  </Text>
-                </View>
 
-                <View
-                  style={[
-                    styles.statusBadge,
-                    getStatusStyle(registration.status),
-                  ]}
-                >
-                  <Text style={styles.statusText}>
-                    {(registration.status || 'pending').toUpperCase()}
-                  </Text>
+                  <View style={styles.regPill}>
+                    <Text style={[styles.regPillText, { color: regTone.pillText }]}>
+                      {status}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </View>
         )}
 
         {isPast ? (
-          <Text style={styles.closedText}>This event has ended.</Text>
+          <Text style={[styles.closedText, { color: tone.sub }]}>
+            This event has ended.
+          </Text>
         ) : (
           <TouchableOpacity
             style={styles.joinButton}
@@ -275,9 +332,9 @@ export default function EventsScreen() {
             onPress={() => joinEvent(item)}
           >
             {isJoining ? (
-              <ActivityIndicator color="#FFFFFF" />
+              <ActivityIndicator color={colors.white} />
             ) : (
-              <Text style={styles.joinButtonText}>Register a Dog</Text>
+              <Text style={styles.joinButtonText}>Register a dog</Text>
             )}
           </TouchableOpacity>
         )}
@@ -288,7 +345,7 @@ export default function EventsScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#237A57" />
+        <ActivityIndicator size="large" color={colors.ink} />
         <Text style={styles.loadingText}>Loading events...</Text>
       </View>
     );
@@ -296,21 +353,38 @@ export default function EventsScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Upcoming Events</Text>
-      <Text style={styles.subtitle}>
-        Browse events and track your dog's registration status.
-      </Text>
+      <Text style={styles.title}>Explore events</Text>
+
+      <View style={styles.chips}>
+        {FILTERS.map((item) => {
+          const active = filter === item.key;
+          return (
+            <TouchableOpacity
+              key={item.key}
+              style={[styles.chip, active && styles.chipActive]}
+              onPress={() => setFilter(item.key)}
+            >
+              <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
 
       <FlatList
-        data={events}
+        data={visibleEvents}
         keyExtractor={(item) => item.id}
         renderItem={renderEvent}
+        showsVerticalScrollIndicator={false}
         contentContainerStyle={
-          events.length === 0 ? styles.emptyContainer : styles.list
+          visibleEvents.length === 0 ? styles.emptyContainer : styles.list
         }
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
+            tintColor={colors.ink}
+            colors={[colors.ink]}
             onRefresh={() => {
               setRefreshing(true);
               loadEvents();
@@ -319,7 +393,9 @@ export default function EventsScreen() {
         }
         ListEmptyComponent={
           <Text style={styles.emptyText}>
-            No open events are available right now. Check again later.
+            {filter === 'all'
+              ? 'No open events are available right now. Check again later.'
+              : `You have no ${filter} registrations.`}
           </Text>
         }
       />
@@ -330,29 +406,56 @@ export default function EventsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F5F7F6',
-    padding: 16,
+    backgroundColor: colors.white,
+    paddingHorizontal: 20,
+    paddingTop: 20,
   },
   center: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#F5F7F6',
+    backgroundColor: colors.white,
   },
   loadingText: {
     marginTop: 10,
-    color: '#555555',
+    fontFamily: fonts.regular,
+    color: colors.muted,
   },
   title: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#183D2B',
+    fontFamily: fonts.medium,
+    fontSize: 28,
+    color: colors.ink,
+    marginBottom: 16,
   },
-  subtitle: {
-    color: '#666666',
-    marginTop: 5,
+
+  // Filter chips
+  chips: {
+    flexDirection: 'row',
+    gap: 10,
     marginBottom: 18,
   },
+  chip: {
+    height: 42,
+    paddingHorizontal: 18,
+    borderRadius: 21,
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.line,
+  },
+  chipActive: {
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
+  },
+  chipText: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    color: colors.ink,
+  },
+  chipTextActive: {
+    color: colors.white,
+  },
+
   list: {
     paddingBottom: 24,
   },
@@ -361,107 +464,140 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   emptyText: {
-    color: '#666666',
+    fontFamily: fonts.regular,
+    color: colors.muted,
     textAlign: 'center',
     padding: 24,
   },
+
+  // Pastel event card
   card: {
-    backgroundColor: '#FFFFFF',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 14,
-    borderWidth: 1,
-    borderColor: '#E2E8E4',
+    borderRadius: 30,
+    paddingHorizontal: 22,
+    paddingTop: 20,
+    paddingBottom: 20,
+    marginBottom: 16,
+  },
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardDate: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+  },
+  statusPill: {
+    paddingHorizontal: 14,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+  },
+  statusPillText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    letterSpacing: 0.4,
   },
   eventName: {
-    fontSize: 19,
-    fontWeight: 'bold',
-    color: '#183D2B',
-    marginBottom: 8,
+    fontFamily: fonts.medium,
+    fontSize: 24,
+    lineHeight: 32,
+    marginTop: 18,
+  },
+  venueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 6,
   },
   venue: {
-    color: '#333333',
-    marginBottom: 8,
-  },
-  date: {
-    fontSize: 12,
-    color: '#666666',
-    marginTop: 4,
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 14,
   },
   description: {
-    color: '#444444',
-    marginTop: 12,
+    fontFamily: fonts.regular,
+    fontSize: 13,
     lineHeight: 20,
+    opacity: 0.8,
+    marginTop: 12,
   },
+
+  // Starts / Ends tiles
+  tiles: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 16,
+  },
+  tile: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  tileLabel: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: colors.tileLabel,
+  },
+  tileValue: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
+    color: colors.ink,
+    marginTop: 2,
+  },
+
+  // Registrations
   registrationSection: {
     marginTop: 16,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8E4',
   },
   registrationHeading: {
+    fontFamily: fonts.medium,
     fontSize: 14,
-    fontWeight: 'bold',
-    color: '#183D2B',
-    marginBottom: 10,
+    marginBottom: 8,
   },
   registrationRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     gap: 8,
-    paddingVertical: 9,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F0F2F0',
-  },
-  registrationInfo: {
-    flex: 1,
+    marginBottom: 6,
   },
   dogName: {
+    flex: 1,
+    fontFamily: fonts.regular,
     fontSize: 15,
-    fontWeight: '600',
-    color: '#263D31',
   },
-  statusLabel: {
-    color: '#777777',
-    fontSize: 12,
-    marginTop: 3,
+  regPill: {
+    paddingHorizontal: 12,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.7)',
   },
-  statusBadge: {
-    borderRadius: 6,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
+  regPillText: {
+    fontFamily: fonts.medium,
+    fontSize: 11,
+    letterSpacing: 0.4,
   },
-  pendingBadge: {
-    backgroundColor: '#FFF0C2',
-  },
-  approvedBadge: {
-    backgroundColor: '#D9F3E3',
-  },
-  rejectedBadge: {
-    backgroundColor: '#FCE0E0',
-  },
-  withdrawnBadge: {
-    backgroundColor: '#E8E8E8',
-  },
-  statusText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#333333',
-  },
+
   joinButton: {
-    backgroundColor: '#237A57',
-    padding: 13,
-    borderRadius: 8,
+    height: 54,
+    borderRadius: 27,
+    backgroundColor: colors.ink,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 16,
+    marginTop: 18,
   },
   joinButtonText: {
-    color: '#FFFFFF',
-    fontWeight: 'bold',
+    fontFamily: fonts.medium,
+    fontSize: 16,
+    color: colors.white,
   },
   closedText: {
-    color: '#777777',
-    marginTop: 14,
+    fontFamily: fonts.regular,
+    marginTop: 16,
   },
 });

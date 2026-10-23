@@ -97,6 +97,15 @@ function MainTabs() {
         component={HistoryScreen}
         options={{ title: 'History' }}
       />
+    
+      <Tab.Screen
+        name="Events"
+        component={EventsScreen}
+        options={{
+          title: 'Events',
+          tabBarLabel: 'Events',
+        }}
+      />
 
       <Tab.Screen
         name="Map"
@@ -108,14 +117,6 @@ function MainTabs() {
         name="Settings"
         component={SettingsScreen}
         options={{ title: 'Settings' }}
-      />
-      <Tab.Screen
-        name="Events"
-        component={EventsScreen}
-        options={{
-          title: 'Events',
-          tabBarLabel: 'Events',
-        }}
       />
     </Tab.Navigator>
   );

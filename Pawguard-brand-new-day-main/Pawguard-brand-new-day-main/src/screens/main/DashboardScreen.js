@@ -21,30 +21,14 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { calculateHealthRisk } from '../../utils/healthRisk';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
-
-import SensorCard from '../../components/SensorCard';
-import RiskBadge from '../../components/RiskBadge';
+import { colors, fonts, tones } from '../../Theme';
 import { registerForPushNotifications } from '../../utils/registerForPush';
+import { getSelectedDogId, setSelectedDogId } from '../../utils/selectedDog';
 
-/**
- * If the newest reading is older than this, the device is "Offline".
- * Set it to roughly 3x how often your device sends data.
- * (e.g. device sends every 30s -> 90 seconds)
- */
 const OFFLINE_AFTER_MS = 2 * 60 * 1000;
-
-// How often to refresh the bell's unread count
 const UNREAD_REFRESH_MS = 15 * 1000;
-
-// Don't send another "device offline" notification within this window
 const OFFLINE_NOTIFY_COOLDOWN_MS = 60 * 60 * 1000;
 
-// Remembers the chosen pet across refocus / tab switches
-// (lives outside the component, so it survives remounts)
-let lastSelectedDogId = null;
-
-// Supabase "timestamp without time zone" columns come back without a "Z",
-// which JS would read as LOCAL time and break the offline check.
 const toMillis = (ts) => {
   if (!ts) return null;
   const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(ts);
@@ -63,6 +47,20 @@ const timeAgo = (ms, now) => {
   if (hr < 24) return `${hr} hr ago`;
   return `${Math.floor(hr / 24)} d ago`;
 };
+
+// Small tile like "Time / Venue" in the reference
+function InfoTile({ label, value, unit }) {
+  const empty = value === null || value === undefined || value === '--';
+  return (
+    <View style={styles.tile}>
+      <Text style={styles.tileLabel}>{label}</Text>
+      <Text style={styles.tileValue}>
+        {empty ? '--' : value}
+        {!empty && <Text style={styles.tileUnit}>{unit}</Text>}
+      </Text>
+    </View>
+  );
+}
 
 export default function DashboardScreen({ navigation }) {
   const { profile } = useAuth();
@@ -88,22 +86,28 @@ export default function DashboardScreen({ navigation }) {
   if (!isPaired) status = 'Not paired';
   else if (!isOnline) status = 'Offline';
 
-  const statusColor =
-    status === 'Online'
-      ? '#22a45d'
-      : status === 'Offline'
-      ? '#796d6d'
-      : '#9aa0a6';
-
-  // Don't judge health from stale data
   const riskLevel = isOnline ? calculateHealthRisk(sensor) : 'UNKNOWN';
 
-  // Register this phone for push notifications
+  // Card colour + pill text follow the pet's state
+  let tone = tones.beige;
+  let pillText = status;
+  if (isOnline) {
+    if (riskLevel === 'HIGH') {
+      tone = tones.salmon;
+      pillText = 'High risk';
+    } else if (riskLevel === 'MODERATE') {
+      tone = tones.amber;
+      pillText = 'Moderate risk';
+    } else {
+      tone = tones.green;
+      pillText = 'Low risk';
+    }
+  }
+
   useEffect(() => {
     if (profile?.id) registerForPushNotifications(profile.id);
   }, [profile?.id]);
 
-  // Re-check every 5s so the status flips to Offline even if no new data arrives
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(timer);
@@ -178,11 +182,10 @@ export default function DashboardScreen({ navigation }) {
 
     setDogs(dogData);
 
-    // Keep the pet the user picked; fall back to the first one
-    const currentDog = dogData.find((item) => item.id === lastSelectedDogId);
+    const currentDog = dogData.find((item) => item.id === getSelectedDogId());
     const dogToUse = currentDog || dogData[0];
 
-    lastSelectedDogId = dogToUse.id;
+    setSelectedDogId(dogToUse.id);
     setSelectedDog(dogToUse);
     await loadDogData(dogToUse);
 
@@ -216,12 +219,10 @@ export default function DashboardScreen({ navigation }) {
   }, [device?.id]);
 
   // ---- Health alerts -------------------------------------------------
-  // Inserting into health_alerts fires a database trigger that creates
-  // the matching row in `notifications` (see the SQL setup).
   const createHealthAlert = async (dog, reading, level) => {
     if (!dog || !reading) return;
     if (level !== 'HIGH' && level !== 'MODERATE') return;
-    if (lastAlertRisk.current === level) return; // avoid duplicates
+    if (lastAlertRisk.current === level) return;
 
     lastAlertRisk.current = level;
 
@@ -237,11 +238,10 @@ export default function DashboardScreen({ navigation }) {
 
     if (error) {
       console.log('HEALTH ALERT ERROR:', error.message);
-      lastAlertRisk.current = null; // allow retry
+      lastAlertRisk.current = null;
       return;
     }
 
-    // Give the trigger a moment, then refresh the bell
     setTimeout(fetchUnreadCount, 800);
   };
 
@@ -256,7 +256,6 @@ export default function DashboardScreen({ navigation }) {
     createHealthAlert(selectedDog, sensor, riskLevel);
   }, [selectedDog?.id, sensor?.id, riskLevel]);
 
-  // Reset alert dedupe when switching dogs
   useEffect(() => {
     lastAlertRisk.current = null;
     offlineNotified.current = false;
@@ -266,7 +265,6 @@ export default function DashboardScreen({ navigation }) {
   const createOfflineNotification = async (dog) => {
     if (!profile?.id) return;
 
-    // Skip if we already notified about this dog recently
     const since = new Date(
       Date.now() - OFFLINE_NOTIFY_COOLDOWN_MS
     ).toISOString();
@@ -292,7 +290,7 @@ export default function DashboardScreen({ navigation }) {
 
     if (error) {
       console.log('OFFLINE NOTIFICATION ERROR:', error.message);
-      offlineNotified.current = false; // allow retry
+      offlineNotified.current = false;
       return;
     }
 
@@ -305,7 +303,6 @@ export default function DashboardScreen({ navigation }) {
       return;
     }
 
-    // Only notify when a paired device HAD sent data and then went quiet
     if (status !== 'Offline' || lastSeen === null) return;
     if (!selectedDog || offlineNotified.current) return;
 
@@ -326,13 +323,15 @@ export default function DashboardScreen({ navigation }) {
   if (dogs.length === 0 && !loading) {
     return (
       <View style={styles.empty}>
-        <Ionicons name="paw" size={56} color="#111827" style={styles.emptyIcon} />
+        <View style={[styles.emptyIcon, { backgroundColor: tones.green.bg }]}>
+          <Ionicons name="paw" size={40} color={tones.green.text} />
+        </View>
         <Text style={styles.emptyTitle}>No pet registered</Text>
         <Text style={styles.emptyText}>
           Register your pet to start using PawGuard.
         </Text>
         <TouchableOpacity
-          style={styles.primaryButton}
+          style={[styles.primaryButton, styles.emptyButton]}
           onPress={() => navigation.navigate('RegisterPet')}
         >
           <Text style={styles.primaryButtonText}>Register pet</Text>
@@ -350,6 +349,8 @@ export default function DashboardScreen({ navigation }) {
       refreshControl={
         <RefreshControl
           refreshing={loading}
+          tintColor={colors.ink}
+          colors={[colors.ink]}
           onRefresh={() => {
             loadDashboard();
             fetchUnreadCount();
@@ -357,36 +358,44 @@ export default function DashboardScreen({ navigation }) {
         />
       }
     >
-      {/* Header */}
+      {/* Header: brand left, icon pill right */}
       <View style={styles.topHeader}>
-        <View>
-          <Text style={styles.greeting}>Welcome back,</Text>
-          <Text style={styles.title}>PawGuard</Text>
+        <View style={styles.brand}>
+          <Text style={styles.brandText}>PawGuard</Text>
+          <View style={styles.brandDot} />
         </View>
 
-        <TouchableOpacity
-          style={styles.notificationButton}
-          onPress={() => navigation.navigate('Notifications')}
-          accessibilityLabel={
-            unreadCount > 0
-              ? `Open notifications, ${unreadCount} unread`
-              : 'Open notifications'
-          }
-        >
-          <Ionicons
-            name="notifications-outline"
-            size={25}
-            color="#0F172A"
-          />
-          {unreadCount > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>
-                {unreadCount > 9 ? '9+' : unreadCount}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
+        <View style={styles.iconPill}>
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => navigation.navigate('RegisterPet')}
+            accessibilityLabel="Add pet"
+          >
+            <Ionicons name="add" size={20} color={colors.ink} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.iconButton}
+            onPress={() => navigation.navigate('Notifications')}
+            accessibilityLabel={
+              unreadCount > 0
+                ? `Open notifications, ${unreadCount} unread`
+                : 'Open notifications'
+            }
+          >
+            <Ionicons name="notifications" size={18} color={colors.ink} />
+            {unreadCount > 0 && (
+              <View style={styles.badge}>
+                <Text style={styles.badgeText}>
+                  {unreadCount > 9 ? '9+' : unreadCount}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
       </View>
+
+      <Text style={styles.title}>My pets</Text>
 
       {/* Pet selector */}
       <ScrollView
@@ -401,7 +410,7 @@ export default function DashboardScreen({ navigation }) {
               key={item.id}
               style={[styles.chip, active && styles.chipActive]}
               onPress={() => {
-                lastSelectedDogId = item.id;
+                setSelectedDogId(item.id);
                 setSelectedDog(item);
                 loadDogData(item);
               }}
@@ -412,136 +421,76 @@ export default function DashboardScreen({ navigation }) {
             </TouchableOpacity>
           );
         })}
-
-        <TouchableOpacity
-          style={[styles.chip, styles.addChip]}
-          onPress={() => navigation.navigate('RegisterPet')}
-        >
-          <Text style={styles.chipText}>+ Add pet</Text>
-        </TouchableOpacity>
       </ScrollView>
 
-      {/* Pet card */}
+      {/* Pastel pet card: pet + device status + risk in one place */}
       {selectedDog && (
-        <View style={styles.card}>
-          <TouchableOpacity
-            activeOpacity={0.7}
-            onPress={() =>
-              navigation.navigate('DogProfile', { dogId: selectedDog.id })
-            }
-          >
-            <View style={styles.petNameRow}>
-              <Ionicons name="paw" size={22} color="#111827" />
-              <Text style={styles.petName}>{selectedDog.name}</Text>
-            </View>
-            <Text style={styles.petInfo}>
-              {selectedDog.breed || 'Unknown breed'}
-              {selectedDog.age ? ` • ${selectedDog.age} years old` : ''}
+        <TouchableOpacity
+          activeOpacity={0.9}
+          style={[styles.petCard, { backgroundColor: tone.bg }]}
+          onPress={() =>
+            navigation.navigate('DogProfile', { dogId: selectedDog.id })
+          }
+        >
+          <View style={styles.cardTop}>
+            <Text style={[styles.cardMeta, { color: tone.sub }]}>
+              {isPaired ? `Last data ${timeAgo(lastSeen, now)}` : 'No device yet'}
             </Text>
-          </TouchableOpacity>
+            <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
+              <Text style={[styles.statusPillText, { color: tone.pillText }]}>
+                {pillText}
+              </Text>
+            </View>
+          </View>
 
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() =>
-                navigation.navigate('Map', { dog: selectedDog })
-              }
-            >
-              <Ionicons name="location-outline" size={16} color="#111827" />
-              <Text style={styles.actionText}>Location</Text>
-            </TouchableOpacity>
+          <Text style={[styles.petName, { color: tone.text }]} numberOfLines={1}>
+            {selectedDog.name}
+          </Text>
+
+          <View style={styles.cardBottom}>
+            <Text style={[styles.petInfo, { color: tone.sub }]} numberOfLines={1}>
+              {selectedDog.breed || 'Unknown breed'}
+              {selectedDog.age ? `  •  ${selectedDog.age} yrs` : ''}
+            </Text>
 
             <TouchableOpacity
-              style={styles.actionButton}
+              style={styles.editButton}
               onPress={() =>
                 navigation.navigate('EditPet', { dogId: selectedDog.id })
               }
+              accessibilityLabel="Edit pet"
             >
-              <Ionicons name="create-outline" size={16} color="#111827" />
-              <Text style={styles.actionText}>Edit</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.actionButton}
-              onPress={() =>
-                navigation.navigate('DogProfile', { dogId: selectedDog.id })
-              }
-            >
-              <Ionicons name="person-outline" size={16} color="#111827" />
-              <Text style={styles.actionText}>Profile</Text>
+              <Ionicons name="create-outline" size={18} color={tone.text} />
             </TouchableOpacity>
           </View>
-        </View>
+        </TouchableOpacity>
       )}
 
-      {/* Device */}
-      <Text style={styles.sectionTitle}>Device</Text>
-      <View style={[styles.card, styles.deviceCard]}>
-        <View>
-          <View style={styles.statusRow}>
-            <View style={[styles.dot, { backgroundColor: statusColor }]} />
-            <Text style={[styles.deviceStatus, { color: statusColor }]}>
-              {status}
-            </Text>
-          </View>
-          {isPaired && (
-            <Text style={styles.lastSeen}>
-              Last data: {timeAgo(lastSeen, now)}
-            </Text>
-          )}
-        </View>
-
-        {!isPaired && selectedDog && (
-          <TouchableOpacity
-            style={styles.primaryButtonSmall}
-            onPress={() =>
-              navigation.navigate('PairDevice', { dogId: selectedDog.id })
-            }
-          >
-            <Text style={styles.primaryButtonText}>Pair device</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Readings */}
+      {/* Readings (like "Event Details" + Time/Venue tiles) */}
       <Text style={styles.sectionTitle}>
-        {isOnline ? 'Current readings' : 'Last known readings'}
+        {isOnline ? 'Live readings' : 'Last known readings'}
       </Text>
 
-      <View style={!isOnline && styles.dimmed}>
-        <View style={styles.row}>
-          <SensorCard
-            title="Surface Temp"
-            value={sensor?.surface_temp ?? '--'}
-            unit="°C"
-            icon={<Ionicons name="thermometer-outline" size={22} color="#111827" />}
-          />
-          <SensorCard
-            title="Ambient Temp"
-            value={sensor?.ambient_temp ?? '--'}
-            unit="°C"
-            icon={<Ionicons name="partly-sunny-outline" size={22} color="#111827" />}
-          />
-        </View>
-
-        <View style={styles.row}>
-          <SensorCard
-            title="Humidity"
-            value={sensor?.humidity ?? '--'}
-            unit="%"
-            icon={<Ionicons name="water-outline" size={22} color="#111827" />}
-          />
-        </View>
+      <View style={[styles.tiles, !isOnline && styles.dimmed]}>
+        <InfoTile label="Surface" value={sensor?.surface_temp} unit="°C" />
+        <InfoTile label="Ambient" value={sensor?.ambient_temp} unit="°C" />
+        <InfoTile label="Humidity" value={sensor?.humidity} unit="%" />
       </View>
 
-      <View style={styles.risk}>
-        <RiskBadge level={riskLevel} />
-      </View>
-
-      {sensor?.timestamp_utc && (
-        <Text style={styles.updated}>
-          Last updated: {new Date(lastSeen).toLocaleString()}
-        </Text>
+      {/* One primary action, like "Register" */}
+      {selectedDog && (
+        <TouchableOpacity
+          style={styles.primaryButton}
+          onPress={() =>
+            isPaired
+              ? navigation.navigate('Map', { dog: selectedDog })
+              : navigation.navigate('PairDevice', { dogId: selectedDog.id })
+          }
+        >
+          <Text style={styles.primaryButtonText}>
+            {isPaired ? 'View location' : 'Pair device'}
+          </Text>
+        </TouchableOpacity>
       )}
     </ScrollView>
   );
@@ -550,11 +499,12 @@ export default function DashboardScreen({ navigation }) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f6f7f9',
+    backgroundColor: colors.white,
   },
   content: {
-    padding: 20,
-    paddingBottom: 40,
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 32,
   },
 
   // Header
@@ -562,192 +512,203 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 20,
+    marginTop: 8,
   },
-  greeting: {
-    fontSize: 15,
-    color: '#6b7280',
+  brand: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
   },
-  title: {
-    fontSize: 30,
-    fontWeight: '800',
-    color: '#111827',
-    marginTop: 2,
+  brandText: {
+    fontFamily: fonts.bold,
+    fontSize: 22,
+    color: colors.ink,
   },
-  notificationButton: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+  brandDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#8fd14f',
+    marginLeft: 3,
+    marginBottom: 7,
+  },
+  iconPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    height: 40,
+    paddingHorizontal: 6,
+    borderRadius: 20,
+    backgroundColor: colors.pill,
+  },
+  iconButton: {
+    width: 34,
+    height: 34,
     justifyContent: 'center',
     alignItems: 'center',
   },
   badge: {
     position: 'absolute',
-    top: -4,
-    right: -4,
-    minWidth: 18,
-    height: 18,
-    paddingHorizontal: 4,
-    borderRadius: 9,
-    backgroundColor: '#ef4444',
-    borderWidth: 2,
-    borderColor: '#f6f7f9',
+    top: 0,
+    right: 0,
+    minWidth: 16,
+    height: 16,
+    paddingHorizontal: 3,
+    borderRadius: 8,
+    backgroundColor: colors.danger,
+    borderWidth: 1.5,
+    borderColor: colors.pill,
     justifyContent: 'center',
     alignItems: 'center',
   },
   badgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: '800',
+    color: colors.white,
+    fontSize: 9,
+    fontFamily: fonts.bold,
   },
 
-  // Pet chips
+  title: {
+    fontFamily: fonts.medium,
+    fontSize: 28,
+    color: colors.ink,
+    marginTop: 36,
+    marginBottom: 16,
+  },
+
+  // Chips
   chips: {
-    marginBottom: 14,
+    flexGrow: 0,
+    marginBottom: 20,
   },
   chip: {
-    backgroundColor: '#fff',
-    paddingVertical: 9,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    marginRight: 8,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+    height: 42,
+    paddingHorizontal: 18,
+    borderRadius: 21,
+    marginRight: 10,
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.line,
   },
   chipActive: {
-    backgroundColor: '#111827',
-    borderColor: '#111827',
-  },
-  addChip: {
-    borderStyle: 'dashed',
+    backgroundColor: colors.ink,
+    borderColor: colors.ink,
   },
   chipText: {
-    fontWeight: '600',
-    color: '#374151',
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    color: colors.ink,
   },
   chipTextActive: {
-    color: '#fff',
+    color: colors.white,
   },
 
-  // Cards
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: '#eef0f3',
+  // Pastel card
+  petCard: {
+    borderRadius: 30,
+    paddingHorizontal: 22,
+    paddingTop: 20,
+    paddingBottom: 18,
+    minHeight: 170,
   },
-  petNameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  petName: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#111827',
-  },
-  petInfo: {
-    marginTop: 4,
-    color: '#6b7280',
-  },
-  actions: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 16,
-  },
-  actionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 5,
-    backgroundColor: '#f3f4f6',
-    paddingVertical: 10,
-    borderRadius: 12,
-  },
-  actionText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#111827',
-  },
-
-  // Sections
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#111827',
-    marginTop: 24,
-    marginBottom: 10,
-  },
-
-  // Device
-  deviceCard: {
+  cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  statusRow: {
+  cardMeta: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+  },
+  statusPill: {
+    paddingHorizontal: 14,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+  },
+  statusPillText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    letterSpacing: 0.4,
+  },
+  petName: {
+    fontFamily: fonts.medium,
+    fontSize: 26,
+    marginTop: 22,
+  },
+  cardBottom: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 6,
   },
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
+  petInfo: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    marginRight: 12,
   },
-  deviceStatus: {
-    fontSize: 20,
-    fontWeight: '700',
-  },
-  lastSeen: {
-    marginTop: 4,
-    color: '#6b7280',
-    fontSize: 13,
+  editButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 
   // Readings
-  row: {
-    flexDirection: 'row',
-    gap: 12,
+  sectionTitle: {
+    fontFamily: fonts.semibold,
+    fontSize: 18,
+    color: colors.ink,
+    marginTop: 28,
     marginBottom: 12,
+    paddingHorizontal: 2,
+  },
+  tiles: {
+    flexDirection: 'row',
+    gap: 10,
   },
   dimmed: {
     opacity: 0.5,
   },
-  risk: {
+  tile: {
+    flex: 1,
+    backgroundColor: colors.tile,
+    borderRadius: 20,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+  },
+  tileLabel: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: colors.tileLabel,
+  },
+  tileValue: {
+    fontFamily: fonts.medium,
+    fontSize: 19,
+    color: colors.ink,
     marginTop: 4,
   },
-  updated: {
-    color: '#9ca3af',
-    marginTop: 16,
-    textAlign: 'center',
-    fontSize: 12,
+  tileUnit: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.tileLabel,
   },
 
-  // Buttons
+  // Button
   primaryButton: {
-    backgroundColor: '#111827',
-    paddingVertical: 13,
-    paddingHorizontal: 28,
-    borderRadius: 14,
-    marginTop: 20,
-  },
-  primaryButtonSmall: {
-    backgroundColor: '#111827',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 12,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.ink,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 28,
   },
   primaryButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
+    fontFamily: fonts.medium,
+    fontSize: 16,
+    color: colors.white,
   },
 
   // Empty state
@@ -756,19 +717,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 30,
-    backgroundColor: '#f6f7f9',
+    backgroundColor: colors.white,
   },
   emptyIcon: {
-    marginBottom: 12,
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 18,
   },
   emptyTitle: {
+    fontFamily: fonts.medium,
     fontSize: 24,
-    fontWeight: '800',
-    color: '#111827',
+    color: colors.ink,
   },
   emptyText: {
+    fontFamily: fonts.regular,
     textAlign: 'center',
     marginTop: 8,
-    color: '#6b7280',
+    color: colors.muted,
+  },
+  emptyButton: {
+    alignSelf: 'stretch',
+    marginTop: 28,
   },
 });

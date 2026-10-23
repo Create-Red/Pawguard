@@ -9,12 +9,13 @@ import {
 } from 'react-native';
 
 import { useAuth } from '../../context/AuthContext';
+import { colors, fonts, tones } from '../../Theme';
 
 export default function SettingsScreen() {
-  const {
-    profile,
-    signOut,
-  } = useAuth();
+  const { profile, signOut } = useAuth();
+
+  const tone = tones.green;
+  const initial = (profile?.name || '?').trim().charAt(0).toUpperCase();
 
   function handleSignOut() {
     Alert.alert(
@@ -36,35 +37,35 @@ export default function SettingsScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>
-        Settings
-      </Text>
+      <Text style={styles.title}>Settings</Text>
 
-      <View style={styles.card}>
-        <Text style={styles.label}>
-          Name
-        </Text>
+      {/* Profile card */}
+      <View style={[styles.card, { backgroundColor: tone.bg }]}>
+        <View style={styles.cardTop}>
+          <Text style={[styles.cardMeta, { color: tone.sub }]}>Signed in as</Text>
 
-        <Text style={styles.value}>
-          {profile?.name}
-        </Text>
+          {!!profile?.role && (
+            <View style={[styles.pill, { backgroundColor: tone.pill }]}>
+              <Text style={[styles.pillText, { color: tone.pillText }]}>
+                {profile.role}
+              </Text>
+            </View>
+          )}
+        </View>
 
-        <Text style={styles.label}>
-          Role
-        </Text>
+        <View style={styles.identity}>
+          <View style={styles.avatar}>
+            <Text style={[styles.avatarText, { color: tone.text }]}>{initial}</Text>
+          </View>
 
-        <Text style={styles.value}>
-          {profile?.role}
-        </Text>
+          <Text style={[styles.name, { color: tone.text }]} numberOfLines={1}>
+            {profile?.name || 'Unknown user'}
+          </Text>
+        </View>
       </View>
 
-      <TouchableOpacity
-        style={styles.logout}
-        onPress={handleSignOut}
-      >
-        <Text style={styles.logoutText}>
-          Sign Out
-        </Text>
+      <TouchableOpacity style={styles.logout} onPress={handleSignOut}>
+        <Text style={styles.logoutText}>Sign out</Text>
       </TouchableOpacity>
     </View>
   );
@@ -73,44 +74,80 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 20,
-    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    backgroundColor: colors.white,
   },
 
   title: {
+    fontFamily: fonts.medium,
     fontSize: 28,
-    fontWeight: '800',
+    color: colors.ink,
     marginBottom: 20,
   },
 
   card: {
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 20,
+    borderRadius: 30,
+    paddingHorizontal: 22,
+    paddingTop: 20,
+    paddingBottom: 24,
+  },
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  cardMeta: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+  },
+  pill: {
+    paddingHorizontal: 14,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+  },
+  pillText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    letterSpacing: 0.4,
   },
 
-  label: {
-    color: '#777',
-    fontSize: 13,
-    marginTop: 10,
+  identity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 22,
   },
-
-  value: {
-    fontSize: 17,
-    fontWeight: '600',
-    marginTop: 4,
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    fontFamily: fonts.medium,
+    fontSize: 24,
+  },
+  name: {
+    flex: 1,
+    fontFamily: fonts.medium,
+    fontSize: 24,
   },
 
   logout: {
-    backgroundColor: '#222',
-    padding: 16,
-    borderRadius: 12,
-    marginTop: 20,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.ink,
+    justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 24,
   },
-
   logoutText: {
-    color: '#fff',
-    fontWeight: '700',
+    fontFamily: fonts.medium,
+    fontSize: 16,
+    color: colors.white,
   },
 });
