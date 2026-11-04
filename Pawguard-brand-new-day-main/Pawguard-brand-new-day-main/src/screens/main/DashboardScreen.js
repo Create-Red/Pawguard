@@ -6,6 +6,7 @@ import React, {
 } from 'react';
 
 import {
+  ActivityIndicator,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -36,11 +37,11 @@ const toMillis = (ts) => {
   return Number.isNaN(ms) ? null : ms;
 };
 
+// Coarse on purpose: "12s ago, 17s ago, 22s ago..." made the card flicker.
 const timeAgo = (ms, now) => {
   if (!ms) return 'No data yet';
   const sec = Math.max(0, Math.floor((now - ms) / 1000));
-  if (sec < 10) return 'Just now';
-  if (sec < 60) return `${sec}s ago`;
+  if (sec < 60) return 'Just now';
   const min = Math.floor(sec / 60);
   if (min < 60) return `${min} min ago`;
   const hr = Math.floor(min / 60);
@@ -48,14 +49,21 @@ const timeAgo = (ms, now) => {
   return `${Math.floor(hr / 24)} d ago`;
 };
 
-// Small tile like "Time / Venue" in the reference
+// Small tile like "Time / Venue" in the reference.
+// Always one decimal so the width doesn't jump (36.5 vs 36.48123).
 function InfoTile({ label, value, unit }) {
-  const empty = value === null || value === undefined || value === '--';
+  const num = Number(value);
+  const empty =
+    value === null ||
+    value === undefined ||
+    value === '' ||
+    !Number.isFinite(num);
+
   return (
     <View style={styles.tile}>
       <Text style={styles.tileLabel}>{label}</Text>
       <Text style={styles.tileValue}>
-        {empty ? '--' : value}
+        {empty ? '--' : num.toFixed(1)}
         {!empty && <Text style={styles.tileUnit}>{unit}</Text>}
       </Text>
     </View>
@@ -69,12 +77,19 @@ export default function DashboardScreen({ navigation }) {
   const [selectedDog, setSelectedDog] = useState(null);
   const [sensor, setSensor] = useState(null);
   const [device, setDevice] = useState(null);
-  const [loading, setLoading] = useState(true);
+
+  // Three separate loading states instead of one:
+  const [initialLoading, setInitialLoading] = useState(true); // first open only
+  const [refreshing, setRefreshing] = useState(false);        // pull-to-refresh only
+  const [dogLoading, setDogLoading] = useState(false);        // switching to another pet
+
   const [now, setNow] = useState(Date.now());
   const [unreadCount, setUnreadCount] = useState(0);
 
   const lastAlertRisk = useRef(null);
   const offlineNotified = useRef(false);
+  const selectedDogRef = useRef(null); // id of the pet currently on screen
+  const dogRequest = useRef(0);        // ignores slow, outdated responses
 
   // ---- Device status -------------------------------------------------
   const lastSeen = toMillis(sensor?.timestamp_utc);
@@ -91,7 +106,9 @@ export default function DashboardScreen({ navigation }) {
   // Card colour + pill text follow the pet's state
   let tone = tones.beige;
   let pillText = status;
-  if (isOnline) {
+  if (dogLoading) {
+    pillText = 'Loading';
+  } else if (isOnline) {
     if (riskLevel === 'HIGH') {
       tone = tones.salmon;
       pillText = 'High risk';
@@ -134,62 +151,92 @@ export default function DashboardScreen({ navigation }) {
   }, [profile?.id]);
 
   // ---- Data loading --------------------------------------------------
-  const loadDogData = async (dog) => {
-    setDevice(null);
-    setSensor(null);
+  // clear = true only when switching to a DIFFERENT pet (its data must not
+  // show the previous pet's values). A normal refresh keeps what is on screen
+  // and swaps in the new values in one go.
+  const loadDogData = async (dog, { clear = false } = {}) => {
+    const key = ++dogRequest.current;
+    const isStale = () => key !== dogRequest.current;
 
-    const { data: deviceData } = await supabase
-      .from('devices')
-      .select('*')
-      .eq('dog_id', dog.id)
-      .maybeSingle();
+    if (clear) {
+      setDevice(null);
+      setSensor(null);
+      setDogLoading(true);
+    }
 
-    setDevice(deviceData);
+    try {
+      const { data: deviceData } = await supabase
+        .from('devices')
+        .select('*')
+        .eq('dog_id', dog.id)
+        .maybeSingle();
 
-    if (!deviceData) return;
+      if (isStale()) return;
 
-    const { data: sensorData } = await supabase
-      .from('sensor_data')
-      .select('*')
-      .eq('device_id', deviceData.id)
-      .order('timestamp_utc', { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      let sensorData = null;
 
-    setSensor(sensorData);
+      if (deviceData) {
+        const { data } = await supabase
+          .from('sensor_data')
+          .select('*')
+          .eq('device_id', deviceData.id)
+          .order('timestamp_utc', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (isStale()) return;
+        sensorData = data;
+      }
+
+      // Set both together so there is no half-updated frame
+      // (device present but sensor still empty = brief "Offline" flash).
+      setDevice(deviceData);
+      setSensor(sensorData);
+    } finally {
+      if (!isStale()) setDogLoading(false);
+    }
   };
 
-  const loadDashboard = async () => {
-    setLoading(true);
+  const loadDashboard = async ({ pull = false } = {}) => {
+    if (pull) setRefreshing(true);
 
-    const { data: dogData, error: dogError } = await supabase
-      .from('dogs')
-      .select('*')
-      .order('created_at', { ascending: true });
+    try {
+      const { data: dogData, error: dogError } = await supabase
+        .from('dogs')
+        .select('*')
+        .eq('owner_id', profile.id)
+        .eq('is_archived', false)
+        .order('created_at', { ascending: true });
 
-    if (dogError) {
-      console.log(dogError.message);
-      setLoading(false);
-      return;
+      if (dogError) {
+        console.log(dogError.message);
+        return;
+      }
+
+      if (!dogData || dogData.length === 0) {
+        selectedDogRef.current = null;
+        setDogs([]);
+        setSelectedDog(null);
+        setDevice(null);
+        setSensor(null);
+        return;
+      }
+
+      setDogs(dogData);
+
+      const currentDog = dogData.find((item) => item.id === getSelectedDogId());
+      const dogToUse = currentDog || dogData[0];
+
+      const samePet = dogToUse.id === selectedDogRef.current;
+      selectedDogRef.current = dogToUse.id;
+
+      setSelectedDogId(dogToUse.id);
+      setSelectedDog(dogToUse);
+      await loadDogData(dogToUse, { clear: !samePet });
+    } finally {
+      setInitialLoading(false);
+      setRefreshing(false);
     }
-
-    if (!dogData || dogData.length === 0) {
-      setDogs([]);
-      setSelectedDog(null);
-      setLoading(false);
-      return;
-    }
-
-    setDogs(dogData);
-
-    const currentDog = dogData.find((item) => item.id === getSelectedDogId());
-    const dogToUse = currentDog || dogData[0];
-
-    setSelectedDogId(dogToUse.id);
-    setSelectedDog(dogToUse);
-    await loadDogData(dogToUse);
-
-    setLoading(false);
   };
 
   // ---- Realtime ------------------------------------------------------
@@ -310,6 +357,7 @@ export default function DashboardScreen({ navigation }) {
     createOfflineNotification(selectedDog);
   }, [status, lastSeen, selectedDog?.id]);
 
+  // Silent refresh whenever the tab is focused (no spinner, nothing cleared)
   useFocusEffect(
     useCallback(() => {
       if (profile?.id) {
@@ -319,8 +367,17 @@ export default function DashboardScreen({ navigation }) {
     }, [profile?.id])
   );
 
+  // ---- First load: one calm spinner instead of a half-empty screen -----
+  if (initialLoading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.ink} />
+      </View>
+    );
+  }
+
   // ---- Empty state ---------------------------------------------------
-  if (dogs.length === 0 && !loading) {
+  if (dogs.length === 0) {
     return (
       <View style={styles.empty}>
         <View style={[styles.emptyIcon, { backgroundColor: tones.green.bg }]}>
@@ -348,11 +405,11 @@ export default function DashboardScreen({ navigation }) {
       showsVerticalScrollIndicator={false}
       refreshControl={
         <RefreshControl
-          refreshing={loading}
+          refreshing={refreshing}
           tintColor={colors.ink}
           colors={[colors.ink]}
           onRefresh={() => {
-            loadDashboard();
+            loadDashboard({ pull: true });
             fetchUnreadCount();
           }}
         />
@@ -366,14 +423,6 @@ export default function DashboardScreen({ navigation }) {
         </View>
 
         <View style={styles.iconPill}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => navigation.navigate('RegisterPet')}
-            accessibilityLabel="Add pet"
-          >
-            <Ionicons name="add" size={20} color={colors.ink} />
-          </TouchableOpacity>
-
           <TouchableOpacity
             style={styles.iconButton}
             onPress={() => navigation.navigate('Notifications')}
@@ -410,9 +459,11 @@ export default function DashboardScreen({ navigation }) {
               key={item.id}
               style={[styles.chip, active && styles.chipActive]}
               onPress={() => {
+                if (item.id === selectedDog?.id) return;
+                selectedDogRef.current = item.id;
                 setSelectedDogId(item.id);
                 setSelectedDog(item);
-                loadDogData(item);
+                loadDogData(item, { clear: true });
               }}
             >
               <Text style={[styles.chipText, active && styles.chipTextActive]}>
@@ -421,6 +472,14 @@ export default function DashboardScreen({ navigation }) {
             </TouchableOpacity>
           );
         })}
+
+        <TouchableOpacity
+          style={styles.addChip}
+          onPress={() => navigation.navigate('RegisterPet')}
+          accessibilityLabel="Add pet"
+        >
+          <Ionicons name="add" size={22} color={colors.ink} />
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Pastel pet card: pet + device status + risk in one place */}
@@ -431,10 +490,16 @@ export default function DashboardScreen({ navigation }) {
           onPress={() =>
             navigation.navigate('DogProfile', { dogId: selectedDog.id })
           }
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${selectedDog.name}'s profile`}
         >
           <View style={styles.cardTop}>
             <Text style={[styles.cardMeta, { color: tone.sub }]}>
-              {isPaired ? `Last data ${timeAgo(lastSeen, now)}` : 'No device yet'}
+              {dogLoading
+                ? 'Loading...'
+                : isPaired
+                ? `Last data ${timeAgo(lastSeen, now)}`
+                : 'No device yet'}
             </Text>
             <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
               <Text style={[styles.statusPillText, { color: tone.pillText }]}>
@@ -453,25 +518,23 @@ export default function DashboardScreen({ navigation }) {
               {selectedDog.age ? `  •  ${selectedDog.age} yrs` : ''}
             </Text>
 
-            <TouchableOpacity
-              style={styles.editButton}
-              onPress={() =>
-                navigation.navigate('EditPet', { dogId: selectedDog.id })
-              }
-              accessibilityLabel="Edit pet"
-            >
-              <Ionicons name="create-outline" size={18} color={tone.text} />
-            </TouchableOpacity>
+            <View style={styles.goButton}>
+              <Ionicons name="chevron-forward" size={18} color={tone.text} />
+            </View>
           </View>
         </TouchableOpacity>
       )}
 
       {/* Readings (like "Event Details" + Time/Venue tiles) */}
       <Text style={styles.sectionTitle}>
-        {isOnline ? 'Live readings' : 'Last known readings'}
+        {dogLoading
+          ? 'Readings'
+          : isOnline
+          ? 'Live readings'
+          : 'Last known readings'}
       </Text>
 
-      <View style={[styles.tiles, !isOnline && styles.dimmed]}>
+      <View style={[styles.tiles, (!isOnline || dogLoading) && styles.dimmed]}>
         <InfoTile label="Surface" value={sensor?.surface_temp} unit="°C" />
         <InfoTile label="Ambient" value={sensor?.ambient_temp} unit="°C" />
         <InfoTile label="Humidity" value={sensor?.humidity} unit="%" />
@@ -480,15 +543,23 @@ export default function DashboardScreen({ navigation }) {
       {/* One primary action, like "Register" */}
       {selectedDog && (
         <TouchableOpacity
-          style={styles.primaryButton}
+          style={[styles.primaryButton, dogLoading && styles.dimmed]}
+          disabled={dogLoading}
           onPress={() =>
             isPaired
               ? navigation.navigate('Map', { dog: selectedDog })
-              : navigation.navigate('PairDevice', { dogId: selectedDog.id })
+              : navigation.navigate('PairDevice', {
+                  dogId: selectedDog.id,
+                  dogName: selectedDog.name,
+                })
           }
         >
           <Text style={styles.primaryButtonText}>
-            {isPaired ? 'View location' : 'Pair device'}
+            {dogLoading
+              ? 'Loading...'
+              : isPaired
+              ? 'View location'
+              : 'Pair device'}
           </Text>
         </TouchableOpacity>
       )}
@@ -505,6 +576,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 32,
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
   },
 
   // Header
@@ -592,6 +669,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.ink,
     borderColor: colors.ink,
   },
+  addChip: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.pill,
+  },
   chipText: {
     fontFamily: fonts.regular,
     fontSize: 14,
@@ -646,7 +731,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginRight: 12,
   },
-  editButton: {
+  goButton: {
     width: 36,
     height: 36,
     borderRadius: 18,
@@ -742,4 +827,4 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: 28,
   },
-});
+});  

@@ -18,6 +18,7 @@ import DogProfileScreen from '../screens/main/DogProfileScreen';
 import PairDeviceScreen from '../screens/onboarding/PairDeviceScreen';
 import MapScreen from '../screens/main/MapScreen';
 import EventsScreen from '../screens/event/EventsScreen';
+import TransferDeviceScreen from '../screens/onboarding/TransferDeviceScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -168,6 +169,14 @@ export default function MainNavigator() {
         }}
       />
       <Stack.Screen
+        name="TransferDevice"
+        component={TransferDeviceScreen}
+        options={{
+          title: 'Transfer Device',
+        }}
+      />
+      <Stack.Screen
+      
         name="Notifications"
         component={NotificationsScreen}
         options={{ title: 'Notifications' }}
