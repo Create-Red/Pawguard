@@ -1,6 +1,5 @@
 
 import React from 'react';
-
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import EventOrganizerDashboardScreen from '../screens/event/EventOrganizerDashboardScreen';
@@ -8,6 +7,8 @@ import CreateEventScreen from '../screens/event/CreateEventScreen';
 import ManageEventScreen from '../screens/event/ManageEventScreen';
 import EventMembersScreen from '../screens/event/EventMembersScreen';
 import EventMonitoringScreen from '../screens/event/EventMonitoringScreen';
+import EventDetailsScreen from '../screens/event/EventDetailsScreen';
+import ParticipantProfileScreen from '../screens/event/ParticipantProfileScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -26,31 +27,37 @@ export default function EventOrganizerNavigator() {
       <Stack.Screen
         name="CreateEvent"
         component={CreateEventScreen}
-        options={{
-          title: 'Create Event',
-        }}
+        options={{ title: 'Create Event' }}
       />
 
       <Stack.Screen
         name="ManageEvent"
         component={ManageEventScreen}
-        options={{
-          title: 'Manage Event',
-        }}
+        options={{ title: 'My Events' }}
       />
+
+      <Stack.Screen
+        name="EventDetails"
+        component={EventDetailsScreen}
+        options={{ title: 'Event Details' }}
+      />
+
       <Stack.Screen
         name="EventMembers"
         component={EventMembersScreen}
-        options={{
-          title: 'Event Members',
-        }}
+        options={{ title: 'Participants' }}
       />
+
+      <Stack.Screen
+        name="ParticipantProfile"
+        component={ParticipantProfileScreen}
+        options={{ title: 'Participant Profile' }}
+      />
+
       <Stack.Screen
         name="EventMonitoring"
         component={EventMonitoringScreen}
-        options={{
-          title: 'Event Monitoring',
-        }}
+        options={{ title: 'Event Monitoring' }}
       />
     </Stack.Navigator>
   );

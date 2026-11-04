@@ -3,6 +3,7 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -150,9 +151,17 @@ export default function DogProfileScreen({ route, navigation }) {
         </View>
 
         <View style={styles.identity}>
-          <View style={styles.avatar}>
-            <Icon name="paw" size={28} color={tone.text} />
-          </View>
+          {dog.photo_url ? (
+  <Image
+    source={{ uri: dog.photo_url }}
+    style={styles.avatar}
+    resizeMode="cover"
+  />
+) : (
+  <View style={styles.avatar}>
+    <Icon name="paw" size={28} color={tone.text} />
+  </View>
+)}
           <Text style={[styles.name, { color: tone.text }]} numberOfLines={2}>
             {dog.name}
           </Text>

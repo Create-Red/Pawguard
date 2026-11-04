@@ -270,41 +270,56 @@ export default function AdminPanelScreen({navigation}) {
         </Text>
       </TouchableOpacity>
 
-      <View style={styles.moduleCard}>
+      <TouchableOpacity
+        style={styles.moduleCard}
+        onPress={() => navigation.navigate('SystemLogs')}
+      >
         <Text style={styles.moduleTitle}>
           📋 System Logs
         </Text>
-        <Text style={styles.moduleDescription}>
-          Review important activities performed in the system.
-        </Text>
-        <Text style={styles.comingSoon}>
-          Coming in the next step
-        </Text>
-      </View>
 
-      <View style={styles.moduleCard}>
+        <Text style={styles.moduleDescription}>
+          Review important activities performed in PawGuard.
+        </Text>
+
+        <Text style={styles.comingSoon}>
+          Open System Logs →
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.moduleCard}
+        onPress={() => navigation.navigate('AlertConfiguration')}
+      >
         <Text style={styles.moduleTitle}>
           ⚙️ Alert Configuration
         </Text>
-        <Text style={styles.moduleDescription}>
-          Configure temperature and humidity alert thresholds.
-        </Text>
-        <Text style={styles.comingSoon}>
-          Coming in the next step
-        </Text>
-      </View>
 
-      <View style={styles.moduleCard}>
+        <Text style={styles.moduleDescription}>
+          Configure surface-temperature and humidity thresholds.
+        </Text>
+
+        <Text style={styles.comingSoon}>
+          Open Alert Configuration →
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.moduleCard}
+        onPress={() => navigation.navigate('DeviceMonitoring')}
+      >
         <Text style={styles.moduleTitle}>
           📡 Device Monitoring
         </Text>
+
         <Text style={styles.moduleDescription}>
-          Monitor registered devices and their status.
+          Monitor registered devices, battery levels, and connection status.
         </Text>
+
         <Text style={styles.comingSoon}>
-          Coming in the next step
+          Open Device Monitoring →
         </Text>
-      </View>
+      </TouchableOpacity>
 
       {/* Sign Out */}
       <TouchableOpacity

@@ -15,8 +15,10 @@ import {
 
 import DateTimePicker from '@react-native-community/datetimepicker';
 
+import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { colors, fonts } from '../../Theme';
 
 const MONTHS = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -235,6 +237,7 @@ export default function CreateEventScreen({ navigation }) {
           mode={pickerMode}
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
           minimumDate={minimumDate}
+          themeVariant="light"
           onChange={handlePickerChange}
         />
         {Platform.OS === 'ios' && (
@@ -254,27 +257,29 @@ export default function CreateEventScreen({ navigation }) {
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        <Text style={styles.title}>Create Event</Text>
-
+        <Text style={styles.title}>Create event</Text>
         <Text style={styles.subtitle}>
           Add the details of your PawGuard event.
         </Text>
 
-        <Text style={styles.label}>Event Name *</Text>
+        <Text style={styles.label}>Event name</Text>
         <TextInput
           style={styles.input}
           placeholder="e.g. PawGuard Dog Fun Run"
+          placeholderTextColor={colors.muted}
           value={name}
           onChangeText={setName}
           editable={!saving}
           maxLength={150}
         />
 
-        <Text style={styles.label}>Description</Text>
+        <Text style={styles.label}>Description (optional)</Text>
         <TextInput
           style={[styles.input, styles.multiline]}
           placeholder="Describe your event and its activities"
+          placeholderTextColor={colors.muted}
           value={description}
           onChangeText={setDescription}
           multiline
@@ -283,51 +288,40 @@ export default function CreateEventScreen({ navigation }) {
           editable={!saving}
         />
 
-        <Text style={styles.label}>Venue *</Text>
+        <Text style={styles.label}>Venue</Text>
         <TextInput
           style={styles.input}
           placeholder="Event venue or address"
+          placeholderTextColor={colors.muted}
           value={venue}
           onChangeText={setVenue}
           editable={!saving}
         />
 
-        <Text style={styles.label}>Start Date and Time *</Text>
+        <Text style={styles.label}>Starts</Text>
         <TouchableOpacity
-          style={styles.dateButton}
+          style={[styles.dateButton, pickerTarget === 'start' && styles.dateButtonOpen]}
           onPress={() => openPicker('start')}
           activeOpacity={0.7}
           disabled={saving}
         >
-          <Text
-            style={[
-              styles.dateButtonText,
-              !startDate && styles.datePlaceholder,
-            ]}
-          >
-            {startDate
-              ? formatDateTime(startDate)
-              : 'Tap to choose start date and time'}
+          <Icon name="calendar-outline" size={18} color={colors.muted} />
+          <Text style={[styles.dateButtonText, !startDate && styles.datePlaceholder]}>
+            {startDate ? formatDateTime(startDate) : 'Choose start date and time'}
           </Text>
         </TouchableOpacity>
         {renderPicker('start')}
 
-        <Text style={styles.label}>End Date and Time *</Text>
+        <Text style={styles.label}>Ends</Text>
         <TouchableOpacity
-          style={styles.dateButton}
+          style={[styles.dateButton, pickerTarget === 'end' && styles.dateButtonOpen]}
           onPress={() => openPicker('end')}
           activeOpacity={0.7}
           disabled={saving}
         >
-          <Text
-            style={[
-              styles.dateButtonText,
-              !endDate && styles.datePlaceholder,
-            ]}
-          >
-            {endDate
-              ? formatDateTime(endDate)
-              : 'Tap to choose end date and time'}
+          <Icon name="calendar-outline" size={18} color={colors.muted} />
+          <Text style={[styles.dateButtonText, !endDate && styles.datePlaceholder]}>
+            {endDate ? formatDateTime(endDate) : 'Choose end date and time'}
           </Text>
         </TouchableOpacity>
         {renderPicker('end')}
@@ -336,11 +330,12 @@ export default function CreateEventScreen({ navigation }) {
           style={[styles.button, saving && styles.disabledButton]}
           onPress={handleCreateEvent}
           disabled={saving}
+          activeOpacity={0.85}
         >
           {saving ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color={colors.onAccent} />
           ) : (
-            <Text style={styles.buttonText}>Create Event</Text>
+            <Text style={styles.buttonText}>Create event</Text>
           )}
         </TouchableOpacity>
       </ScrollView>
@@ -349,107 +344,87 @@ export default function CreateEventScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#F6F7F9',
-  },
+  container: { flex: 1, backgroundColor: colors.white },
+  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 40 },
 
-  content: {
-    padding: 22,
-    paddingBottom: 40,
-  },
-
-  title: {
-    fontSize: 27,
-    fontWeight: '800',
-    color: '#17202A',
-    marginBottom: 8,
-  },
-
+  title: { fontFamily: fonts.medium, fontSize: 28, color: colors.ink },
   subtitle: {
+    fontFamily: fonts.regular,
     fontSize: 14,
-    color: '#64748B',
-    marginBottom: 24,
+    color: colors.muted,
+    marginTop: 4,
+    marginBottom: 28,
   },
 
   label: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#17202A',
-    marginBottom: 7,
+    fontFamily: fonts.medium,
+    fontSize: 13,
+    color: colors.muted,
+    marginBottom: 8,
+    marginLeft: 4,
   },
 
   input: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DDE1E7',
-    borderRadius: 12,
-    padding: 14,
-    fontSize: 14,
-    marginBottom: 18,
-    color: '#17202A',
+    backgroundColor: colors.tile,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 15,
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.ink,
+    marginBottom: 20,
   },
-
-  multiline: {
-    minHeight: 100,
-  },
+  multiline: { minHeight: 110 },
 
   dateButton: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DDE1E7',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: colors.tile,
+    borderRadius: 18,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    marginBottom: 20,
   },
-
+  dateButtonOpen: {
+    borderWidth: 2,
+    borderColor: colors.accent,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+  },
   dateButtonText: {
-    fontSize: 14,
-    color: '#17202A',
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.ink,
   },
-
-  datePlaceholder: {
-    color: '#9AA3AF',
-  },
+  datePlaceholder: { color: colors.muted },
 
   iosPickerWrap: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#DDE1E7',
-    borderRadius: 12,
-    marginBottom: 18,
+    backgroundColor: colors.tile,
+    borderRadius: 20,
+    marginBottom: 20,
     paddingBottom: 8,
   },
-
   pickerDone: {
     alignSelf: 'flex-end',
-    paddingHorizontal: 16,
+    paddingHorizontal: 18,
     paddingVertical: 8,
   },
-
   pickerDoneText: {
-    color: '#222222',
-    fontWeight: '800',
+    fontFamily: fonts.semibold,
     fontSize: 15,
+    color: colors.accentDeep,
   },
 
   button: {
-    backgroundColor: '#222222',
-    padding: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-    minHeight: 54,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 12,
   },
-
-  disabledButton: {
-    opacity: 0.6,
-  },
-
-  buttonText: {
-    color: '#FFFFFF',
-    fontWeight: '800',
-    fontSize: 15,
-  },
+  disabledButton: { opacity: 0.6 },
+  buttonText: { fontFamily: fonts.medium, fontSize: 16, color: colors.onAccent },
 });

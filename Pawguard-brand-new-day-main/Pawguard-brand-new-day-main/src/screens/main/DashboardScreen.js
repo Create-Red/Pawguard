@@ -7,6 +7,7 @@ import React, {
 
 import {
   ActivityIndicator,
+  Image,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -18,7 +19,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 
 import Icon from '../../components/Icon';
-import { calculateHealthRisk } from '../../utils/healthRisk';
+import { calculateHealthRisk, loadAlertThresholds } from '../../utils/healthRisk';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
@@ -392,14 +393,19 @@ export default function DashboardScreen({ navigation }) {
   }, [status, lastSeen, selectedDog?.id]);
 
   // Silent refresh whenever the tab is focused (no spinner, nothing cleared)
-  useFocusEffect(
-    useCallback(() => {
-      if (profile?.id) {
-        loadDashboard();
-        fetchUnreadCount();
-      }
-    }, [profile?.id])
-  );
+    useFocusEffect(
+      useCallback(() => {
+        if (profile?.id) {
+          const refreshDashboard = async () => {
+            await loadAlertThresholds(supabase);
+            await loadDashboard();
+            fetchUnreadCount();
+          };
+
+          refreshDashboard();
+        }
+      }, [profile?.id])
+    );
 
   // ---- First load: one calm spinner instead of a half-empty screen -----
   if (initialLoading) {
@@ -516,7 +522,7 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Pastel pet card: pet + device status + risk in one place */}
+      {/* Pastel pet card */}
       {selectedDog && (
         <TouchableOpacity
           activeOpacity={0.9}
@@ -535,6 +541,7 @@ export default function DashboardScreen({ navigation }) {
                 ? `Last data ${timeAgo(lastSeen, now)}`
                 : 'No device yet'}
             </Text>
+
             <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
               <Text style={[styles.statusPillText, { color: tone.pillText }]}>
                 {pillText}
@@ -542,15 +549,35 @@ export default function DashboardScreen({ navigation }) {
             </View>
           </View>
 
-          <Text style={[styles.petName, { color: tone.text }]} numberOfLines={1}>
-            {selectedDog.name}
-          </Text>
+          <View style={styles.cardIdentity}>
+            {selectedDog.photo_url ? (
+              <Image
+                source={{ uri: selectedDog.photo_url }}
+                style={styles.petPhoto}
+                resizeMode="cover"
+              />
+            ) : (
+              <View style={styles.petPhotoFallback}>
+                <Icon name="paw" size={32} color={tone.text} />
+              </View>
+            )}
 
-          <View style={styles.cardBottom}>
-            <Text style={[styles.petInfo, { color: tone.sub }]} numberOfLines={1}>
-              {selectedDog.breed || 'Unknown breed'}
-              {selectedDog.age ? `  •  ${selectedDog.age} yrs` : ''}
-            </Text>
+            <View style={styles.petDetails}>
+              <Text
+                style={[styles.petName, { color: tone.text }]}
+                numberOfLines={1}
+              >
+                {selectedDog.name}
+              </Text>
+
+              <Text
+                style={[styles.petInfo, { color: tone.sub }]}
+                numberOfLines={2}
+              >
+                {selectedDog.breed || 'Unknown breed'}
+                {selectedDog.age ? `  •  ${selectedDog.age} yrs` : ''}
+              </Text>
+            </View>
 
             <View style={styles.goButton}>
               <Icon name="chevron-forward" size={18} color={tone.text} />
@@ -558,7 +585,6 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </TouchableOpacity>
       )}
-
       {/* Readings (like "Event Details" + Time/Venue tiles) */}
       <Text style={styles.sectionTitle}>
         {dogLoading
@@ -989,4 +1015,31 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: 28,
   },
+  cardIdentity: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  marginTop: 20,
+  gap: 14,
+},
+
+petPhoto: {
+  width: 82,
+  height: 82,
+  borderRadius: 20,
+  backgroundColor: 'rgba(255,255,255,0.6)',
+},
+
+petPhotoFallback: {
+  width: 82,
+  height: 82,
+  borderRadius: 20,
+  backgroundColor: 'rgba(255,255,255,0.6)',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+
+petDetails: {
+  flex: 1,
+  justifyContent: 'center',
+},
 });

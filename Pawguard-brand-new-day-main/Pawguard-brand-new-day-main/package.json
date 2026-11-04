@@ -25,6 +25,7 @@
     "expo-dev-client": "~58.0.18",
     "expo-device": "~58.0.5",
     "expo-font": "~58.0.11",
+    "expo-image-picker": "~58.0.10",
     "expo-notifications": "~58.1.7",
     "expo-status-bar": "~58.0.4",
     "lucide-react-native": "^1.67.0",

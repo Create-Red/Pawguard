@@ -47,7 +47,7 @@ const formatLongDate = (value) =>
     year: 'numeric',
   });
 
-export default function EventsScreen() {
+export default function EventsScreen({ navigation }) {
   const { user } = useAuth();
 
   const [events, setEvents] = useState([]);
@@ -347,6 +347,19 @@ export default function EventsScreen() {
               </View>
             )}
 
+            <TouchableOpacity
+              style={styles.viewButton}
+              activeOpacity={0.8}
+              onPress={() =>
+                navigation.navigate('EventDetail', { eventId: item.id })
+              }
+            >
+              <Text style={[styles.viewButtonText, { color: tone.text }]}>
+                Details and participants
+              </Text>
+              <Icon name="chevron-forward" size={16} color={tone.text} />
+            </TouchableOpacity>
+
             {isPast ? (
               <Text style={[styles.closedText, { color: tone.sub }]}>
                 This event has ended.
@@ -601,6 +614,21 @@ const styles = StyleSheet.create({
     fontFamily: fonts.medium,
     fontSize: 11,
     letterSpacing: 0.4,
+  },
+
+  viewButton: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    marginTop: 16,
+  },
+  viewButtonText: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
   },
 
   joinButton: {
