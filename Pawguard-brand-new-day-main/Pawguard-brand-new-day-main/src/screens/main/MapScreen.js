@@ -8,7 +8,8 @@ import {
 } from 'react-native';
 
 import MapView, { Marker } from 'react-native-maps';
-import Ionicons from '@expo/vector-icons/Ionicons';
+import Icon from '../../components/Icon';
+import Glass from '../../components/Glass';
 
 import { supabase } from '../../config/supabase';
 import { colors, fonts, tones } from '../../Theme';
@@ -150,7 +151,7 @@ export default function MapScreen({ route }) {
     return (
       <View style={styles.center}>
         <View style={[styles.emptyIcon, { backgroundColor: tones.beige.bg }]}>
-          <Ionicons name="location-outline" size={40} color={tones.beige.pillText} />
+          <Icon name="location-outline" size={40} color={tones.beige.pillText} />
         </View>
         <Text style={styles.emptyTitle}>Location unavailable</Text>
         <Text style={styles.emptyText}>
@@ -167,7 +168,7 @@ export default function MapScreen({ route }) {
   const latitude = Number(sensor.latitude);
   const longitude = Number(sensor.longitude);
 
-  const tone = tones.green;
+  const tone = tones.brand;
 
   const extras = [];
   if (sensor.satellites != null) extras.push(`${sensor.satellites} satellites`);
@@ -190,12 +191,12 @@ export default function MapScreen({ route }) {
           coordinate={{ latitude, longitude }}
           title={dog?.name || 'Your Dog'}
           description="PawGuard GPS location"
-          pinColor={colors.ink}
+          pinColor={colors.accent}
         />
       </MapView>
 
       {/* Bottom pastel panel */}
-      <View style={[styles.infoPanel, { backgroundColor: tone.bg }]}>
+      <Glass radius={30} intensity={60} style={styles.infoPanel}>
         <View style={styles.panelTop}>
           <Text style={[styles.updated, { color: tone.sub }]} numberOfLines={1}>
             {sensor.timestamp_utc
@@ -232,7 +233,7 @@ export default function MapScreen({ route }) {
             <Text style={styles.tileValue}>{longitude.toFixed(6)}</Text>
           </View>
         </View>
-      </View>
+      </Glass>
     </View>
   );
 }
@@ -281,7 +282,7 @@ const styles = StyleSheet.create({
 
   infoPanel: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 104, // sits above the floating tab bar
     left: 20,
     right: 20,
     borderRadius: 30,

@@ -1,28 +1,40 @@
-// src/theme.js
+// src/Theme.js
+// Calm, natural palette: warm neutrals + ONE accent (deep sage).
+// Change `accent` / `onAccent` here and every button, active chip and
+// the tab bar follows.
 export const colors = {
-  ink: '#1c1c1e',     // black pills, buttons, titles
-  white: '#ffffff',
-  muted: '#8e8e96',
-  line: '#e8e8ec',    // outline chips
-  pill: '#f1f2f4',    // header icon pill
-  tile: '#eef4f8',    // info tiles
-  tileLabel: '#7b8794',
-  danger: '#ef4444',
+  white: '#fcfaf6',      // warm off-white (screen background, easier on the eyes than pure white)
+  ink: '#2f2d29',        // warm charcoal text (softer than black)
+  muted: '#8a867d',      // secondary text
+  line: '#e9e5dc',       // outlines and hairlines
+  pill: '#f0ede6',       // header pill, soft buttons
+  tile: '#eef1ea',       // quiet sage-grey info tiles
+  tileLabel: '#8a867d',
+
+  accent: '#5b7a65',     // deep sage: buttons, active chips, highlights
+  onAccent: '#fcfaf6',   // text / icons that sit on the accent
+  accentDeep: '#4a6652', // sage for small text or links
+
+  danger: '#c4574b',     // softened red
 };
 
-// Pastel card tones (green / salmon / beige / amber)
+// Card tones. All muted so nothing glares.
+//   brand = default card (neutral sand)
+//   green / amber / salmon = low / moderate / high risk
+//   beige = offline or not paired (cool grey-stone)
 export const tones = {
-  green:  { bg: '#c8dcbc', sub: '#7f9a74', text: '#3f4a3a', pill: '#dcebd3', pillText: '#6b8461' },
-  salmon: { bg: '#fbbcb4', sub: '#cf6b5f', text: '#4a3330', pill: '#fde3df', pillText: '#a2402f' },
-  beige:  { bg: '#ede4d8', sub: '#b99a7a', text: '#4a4036', pill: '#faf5ee', pillText: '#8a5a22' },
-  amber:  { bg: '#f6e3b0', sub: '#b58a2a', text: '#4a3f22', pill: '#fcf2d3', pillText: '#8a6414' },
+  brand:  { bg: '#ebe5d9', sub: '#8d8168', text: '#3b362b', pill: '#f6f2ea', pillText: '#6f6450' },
+  green:  { bg: '#d5e4cd', sub: '#6f8a64', text: '#2f4029', pill: '#e8f1e2', pillText: '#527046' },
+  amber:  { bg: '#f0dcb4', sub: '#9a7a35', text: '#4a3a16', pill: '#f8ecd3', pillText: '#7c5f1c' },
+  salmon: { bg: '#eec5bc', sub: '#b5655a', text: '#4a2b26', pill: '#f7dfd9', pillText: '#9a4538' },
+  beige:  { bg: '#e6e6e1', sub: '#8b8b82', text: '#3d3d38', pill: '#f3f3ef', pillText: '#6b6b63' },
 };
 
-// Poppins (same font as the reference). Install with:
-//   npx expo install expo-font @expo-google-fonts/poppins
+// Urbanist: closest free match to the reference's rounded geometric type.
+//   npx expo install expo-font @expo-google-fonts/urbanist
 export const fonts = {
-  regular: 'Poppins_400Regular',
-  medium: 'Poppins_500Medium',
-  semibold: 'Poppins_600SemiBold',
-  bold: 'Poppins_700Bold',
+  regular: 'Urbanist_400Regular',
+  medium: 'Urbanist_500Medium',
+  semibold: 'Urbanist_600SemiBold',
+  bold: 'Urbanist_700Bold',
 };

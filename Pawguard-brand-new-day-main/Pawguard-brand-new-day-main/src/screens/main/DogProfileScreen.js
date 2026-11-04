@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 
-import Ionicons from '@expo/vector-icons/Ionicons';
+import Icon from '../../components/Icon';
 
 import { supabase } from '../../config/supabase';
 import { colors, fonts, tones } from '../../Theme';
@@ -130,7 +130,7 @@ export default function DogProfileScreen({ route, navigation }) {
     );
   }
 
-  const tone = device ? tones.green : tones.beige;
+  const tone = device ? tones.brand : tones.beige;
 
   return (
     <ScrollView
@@ -151,7 +151,7 @@ export default function DogProfileScreen({ route, navigation }) {
 
         <View style={styles.identity}>
           <View style={styles.avatar}>
-            <Ionicons name="paw" size={28} color={tone.text} />
+            <Icon name="paw" size={28} color={tone.text} />
           </View>
           <Text style={[styles.name, { color: tone.text }]} numberOfLines={2}>
             {dog.name}
@@ -212,7 +212,7 @@ export default function DogProfileScreen({ route, navigation }) {
               })
             }
           >
-            <Ionicons name="swap-horizontal" size={18} color={colors.ink} />
+            <Icon name="swap-horizontal" size={18} color={colors.ink} />
             <Text style={styles.secondaryButtonText}>
               Transfer to another dog
             </Text>
@@ -234,7 +234,7 @@ export default function DogProfileScreen({ route, navigation }) {
               })
             }
           >
-            <Ionicons name="link-outline" size={18} color={colors.ink} />
+            <Icon name="link-outline" size={18} color={colors.ink} />
             <Text style={styles.secondaryButtonText}>Pair device</Text>
           </TouchableOpacity>
         </>
@@ -418,7 +418,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 36,
@@ -426,7 +426,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontFamily: fonts.medium,
     fontSize: 16,
-    color: colors.white,
+    color: colors.onAccent,
   },
   dangerButton: {
     height: 52,

@@ -20,7 +20,7 @@ import {
 
 import { useFocusEffect } from '@react-navigation/native';
 import { LineChart } from 'react-native-chart-kit';
-import Ionicons from '@expo/vector-icons/Ionicons';
+import Icon from '../../components/Icon';
 // npx expo install @react-native-community/datetimepicker
 import DateTimePicker from '@react-native-community/datetimepicker';
 
@@ -395,7 +395,7 @@ export default function HistoryScreen() {
 
   // ---- Derived values ------------------------------------------------
   const latest = records[0];
-  const tone = tones.green;
+  const tone = tones.brand;
   const metric = METRICS.find((m) => m.key === metricKey) || METRICS[0];
 
   const surface = formatReading(latest?.surface_temp, '', 1);
@@ -458,10 +458,10 @@ export default function HistoryScreen() {
             activeOpacity={0.8}
             accessibilityLabel="Pick a date"
           >
-            <Ionicons
+            <Icon
               name="calendar-outline"
               size={18}
-              color={selectedDate ? colors.white : colors.ink}
+              color={selectedDate ? colors.onAccent : colors.ink}
             />
             <Text
               style={[
@@ -652,7 +652,7 @@ export default function HistoryScreen() {
                     ? 'Show less'
                     : `Show all ${Math.min(records.length, EXPANDED_ROWS)} records`}
                 </Text>
-                <Ionicons
+                <Icon
                   name={expanded ? 'chevron-up' : 'chevron-down'}
                   size={16}
                   color={colors.ink}
@@ -721,7 +721,7 @@ export default function HistoryScreen() {
                 display="inline"
                 maximumDate={new Date()}
                 themeVariant="light"
-                accentColor={colors.ink}
+                accentColor={colors.accent}
                 onChange={(event, date) => {
                   if (date) setTempDate(date);
                 }}
@@ -742,7 +742,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 20,
     paddingTop: 20,
-    paddingBottom: 40,
+    paddingBottom: 120,
   },
   center: {
     flex: 1,
@@ -792,7 +792,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.pill,
   },
   dateButtonActive: {
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
   },
   dateButtonText: {
     fontFamily: fonts.medium,
@@ -800,7 +800,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   dateButtonTextActive: {
-    color: colors.white,
+    color: colors.onAccent,
   },
   clearButton: {
     paddingHorizontal: 14,
@@ -906,8 +906,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   metricChipActive: {
-    backgroundColor: colors.ink,
-    borderColor: colors.ink,
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   metricChipText: {
     fontFamily: fonts.regular,
@@ -915,7 +915,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   metricChipTextActive: {
-    color: colors.white,
+    color: colors.onAccent,
   },
 
   // Chart (no box)

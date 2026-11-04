@@ -1,7 +1,13 @@
-
 import React from 'react';
 
 import { NavigationContainer } from '@react-navigation/native';
+import {
+  useFonts,
+  Urbanist_400Regular,
+  Urbanist_500Medium,
+  Urbanist_600SemiBold,
+  Urbanist_700Bold,
+} from '@expo-google-fonts/urbanist';
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 
@@ -46,6 +52,17 @@ function AppContent() {
 }
 
 export default function App() {
+  // Hooks must live inside the component, not at the bottom of the file
+  const [fontsLoaded] = useFonts({
+    Urbanist_400Regular,
+    Urbanist_500Medium,
+    Urbanist_600SemiBold,
+    Urbanist_700Bold,
+  });
+
+  // Wait for the font so text doesn't flash in the wrong typeface
+  if (!fontsLoaded) return null;
+
   return (
     <AuthProvider>
       <NavigationContainer>

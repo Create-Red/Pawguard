@@ -1,12 +1,14 @@
 import React from 'react';
 
-import { Ionicons } from '@expo/vector-icons';
 import {
   createNativeStackNavigator,
 } from '@react-navigation/native-stack';
 import {
   createBottomTabNavigator,
 } from '@react-navigation/bottom-tabs';
+
+import { colors, fonts } from '../Theme';
+import CustomTabBar from '../components/CustomTabBar';
 
 import DashboardScreen from '../screens/main/DashboardScreen';
 import HistoryScreen from '../screens/main/HistoryScreen';
@@ -26,69 +28,9 @@ const Tab = createBottomTabNavigator();
 function MainTabs() {
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-
-        tabBarActiveTintColor: '#2563EB',
-        tabBarInactiveTintColor: '#94A3B8',
-
-        tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopColor: '#E8EDF4',
-          borderTopWidth: 1,
-          height: 68,
-          paddingTop: 8,
-          paddingBottom: 8,
-          elevation: 8,
-        },
-
-        tabBarLabelStyle: {
-          fontSize: 11,
-          fontWeight: '600',
-        },
-
-        tabBarIcon: ({ color, size, focused }) => {
-          let iconName;
-
-          switch (route.name) {
-            case 'Dashboard':
-              iconName = focused ? 'home' : 'home-outline';
-              break;
-
-            case 'History':
-              iconName = focused ? 'analytics' : 'analytics-outline';
-              break;
-
-            case 'Notifications':
-              iconName = focused
-                ? 'notifications'
-                : 'notifications-outline';
-              break;
-
-            case 'Settings':
-              iconName = focused ? 'settings' : 'settings-outline';
-              break;
-
-            case 'Map':
-              iconName = focused ? 'map' : 'map-outline';
-              break;
-            case 'Events':
-              iconName = focused ? 'calendar' : 'calendar-outline';
-              break;
-
-            default:
-              iconName = 'ellipse-outline';
-          }
-
-          return (
-            <Ionicons
-              name={iconName}
-              size={size}
-              color={color}
-            />
-          );
-        },
-      })}
+      // Floating glass tab bar (icons + labels live in CustomTabBar.js)
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={{ headerShown: false }}
     >
       <Tab.Screen
         name="Dashboard"
@@ -101,7 +43,7 @@ function MainTabs() {
         component={HistoryScreen}
         options={{ title: 'History' }}
       />
-    
+
       <Tab.Screen
         name="Events"
         component={EventsScreen}
@@ -128,7 +70,16 @@ function MainTabs() {
 
 export default function MainNavigator() {
   return (
-    <Stack.Navigator>
+    <Stack.Navigator
+      // Headers match the rest of the app: flat, white, Urbanist title
+      screenOptions={{
+        headerShadowVisible: false,
+        headerTintColor: colors.ink,
+        headerStyle: { backgroundColor: colors.white },
+        headerTitleStyle: { fontFamily: fonts.semibold, fontSize: 17 },
+        contentStyle: { backgroundColor: colors.white },
+      }}
+    >
       <Stack.Screen
         name="MainTabs"
         component={MainTabs}
@@ -168,6 +119,7 @@ export default function MainNavigator() {
           title: 'Pair Device',
         }}
       />
+
       <Stack.Screen
         name="TransferDevice"
         component={TransferDeviceScreen}
@@ -175,12 +127,12 @@ export default function MainNavigator() {
           title: 'Transfer Device',
         }}
       />
+
       <Stack.Screen
-      
         name="Notifications"
         component={NotificationsScreen}
         options={{ title: 'Notifications' }}
-    />
+      />
     </Stack.Navigator>
   );
 }

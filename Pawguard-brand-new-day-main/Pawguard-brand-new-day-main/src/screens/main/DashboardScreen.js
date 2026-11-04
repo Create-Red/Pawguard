@@ -17,8 +17,7 @@ import {
 
 import { useFocusEffect } from '@react-navigation/native';
 
-// Bare React Native: import Ionicons from 'react-native-vector-icons/Ionicons';
-import Ionicons from '@expo/vector-icons/Ionicons';
+import Icon from '../../components/Icon';
 import { calculateHealthRisk } from '../../utils/healthRisk';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -77,6 +76,7 @@ export default function DashboardScreen({ navigation }) {
   const [selectedDog, setSelectedDog] = useState(null);
   const [sensor, setSensor] = useState(null);
   const [device, setDevice] = useState(null);
+  const [approvedEvents, setApprovedEvents] = useState([]); // upcoming, approved for this pet
 
   // Three separate loading states instead of one:
   const [initialLoading, setInitialLoading] = useState(true); // first open only
@@ -161,6 +161,7 @@ export default function DashboardScreen({ navigation }) {
     if (clear) {
       setDevice(null);
       setSensor(null);
+      setApprovedEvents([]);
       setDogLoading(true);
     }
 
@@ -188,10 +189,42 @@ export default function DashboardScreen({ navigation }) {
         sensorData = data;
       }
 
-      // Set both together so there is no half-updated frame
+      // Events this pet is approved for (upcoming only).
+      // A failure here must never break the rest of the dashboard.
+      let eventRows = [];
+      try {
+        const { data: regs, error: regError } = await supabase
+          .from('event_members')
+          .select('event_id')
+          .eq('dog_id', dog.id)
+          .eq('status', 'approved');
+
+        if (!regError && regs && regs.length > 0) {
+          const ids = [...new Set(regs.map((r) => r.event_id))];
+
+          const { data: evs, error: evError } = await supabase
+            .from('events')
+            .select('id, name, venue, starts_at, ends_at')
+            .in('id', ids)
+            .order('starts_at', { ascending: true });
+
+          if (!evError && evs) {
+            eventRows = evs.filter(
+              (e) => new Date(e.ends_at).getTime() >= Date.now()
+            );
+          }
+        }
+      } catch (e) {
+        console.log('APPROVED EVENTS ERROR:', e.message);
+      }
+
+      if (isStale()) return;
+
+      // Set everything together so there is no half-updated frame
       // (device present but sensor still empty = brief "Offline" flash).
       setDevice(deviceData);
       setSensor(sensorData);
+      setApprovedEvents(eventRows);
     } finally {
       if (!isStale()) setDogLoading(false);
     }
@@ -219,6 +252,7 @@ export default function DashboardScreen({ navigation }) {
         setSelectedDog(null);
         setDevice(null);
         setSensor(null);
+        setApprovedEvents([]);
         return;
       }
 
@@ -380,8 +414,8 @@ export default function DashboardScreen({ navigation }) {
   if (dogs.length === 0) {
     return (
       <View style={styles.empty}>
-        <View style={[styles.emptyIcon, { backgroundColor: tones.green.bg }]}>
-          <Ionicons name="paw" size={40} color={tones.green.text} />
+        <View style={[styles.emptyIcon, { backgroundColor: tones.brand.bg }]}>
+          <Icon name="paw" size={40} color={tones.brand.text} />
         </View>
         <Text style={styles.emptyTitle}>No pet registered</Text>
         <Text style={styles.emptyText}>
@@ -432,7 +466,7 @@ export default function DashboardScreen({ navigation }) {
                 : 'Open notifications'
             }
           >
-            <Ionicons name="notifications" size={18} color={colors.ink} />
+            <Icon name="notifications" size={18} color={colors.ink} />
             {unreadCount > 0 && (
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>
@@ -478,7 +512,7 @@ export default function DashboardScreen({ navigation }) {
           onPress={() => navigation.navigate('RegisterPet')}
           accessibilityLabel="Add pet"
         >
-          <Ionicons name="add" size={22} color={colors.ink} />
+          <Icon name="add" size={22} color={colors.ink} />
         </TouchableOpacity>
       </ScrollView>
 
@@ -519,7 +553,7 @@ export default function DashboardScreen({ navigation }) {
             </Text>
 
             <View style={styles.goButton}>
-              <Ionicons name="chevron-forward" size={18} color={tone.text} />
+              <Icon name="chevron-forward" size={18} color={tone.text} />
             </View>
           </View>
         </TouchableOpacity>
@@ -563,6 +597,61 @@ export default function DashboardScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
       )}
+
+      {/* Upcoming events this pet is approved for */}
+      <View style={styles.eventsHeader}>
+        <Text style={styles.eventsTitle}>Upcoming events</Text>
+        <TouchableOpacity onPress={() => navigation.navigate('Events')}>
+          <Text style={styles.seeAll}>
+            {approvedEvents.length > 0 ? 'See all' : 'Browse'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {approvedEvents.length === 0 ? (
+        <Text style={styles.eventsEmpty}>
+          {dogLoading
+            ? 'Loading...'
+            : `${selectedDog?.name || 'Your pet'} has no approved events yet.`}
+        </Text>
+      ) : (
+        approvedEvents.slice(0, 3).map((event, index, list) => {
+          const date = new Date(event.starts_at);
+          const valid = !Number.isNaN(date.getTime());
+
+          return (
+            <TouchableOpacity
+              key={event.id}
+              style={[
+                styles.eventRow,
+                index === list.length - 1 && styles.eventRowLast,
+              ]}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('Events')}
+            >
+              <View style={styles.dateBadge}>
+                <Text style={styles.dateDay}>{valid ? date.getDate() : '--'}</Text>
+                <Text style={styles.dateMonth}>
+                  {valid
+                    ? date.toLocaleDateString([], { month: 'short' }).toUpperCase()
+                    : ''}
+                </Text>
+              </View>
+
+              <View style={styles.eventText}>
+                <Text style={styles.eventName} numberOfLines={1}>
+                  {event.name}
+                </Text>
+                <Text style={styles.eventVenue} numberOfLines={1}>
+                  {event.venue}
+                </Text>
+              </View>
+
+              <Icon name="chevron-forward" size={18} color={colors.muted} />
+            </TouchableOpacity>
+          );
+        })
+      )}
     </ScrollView>
   );
 }
@@ -575,7 +664,7 @@ const styles = StyleSheet.create({
   content: {
     paddingHorizontal: 20,
     paddingTop: 12,
-    paddingBottom: 32,
+    paddingBottom: 120,
   },
   center: {
     flex: 1,
@@ -604,7 +693,7 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#8fd14f',
+    backgroundColor: colors.accent,
     marginLeft: 3,
     marginBottom: 7,
   },
@@ -666,8 +755,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   chipActive: {
-    backgroundColor: colors.ink,
-    borderColor: colors.ink,
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   addChip: {
     width: 42,
@@ -683,7 +772,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   chipTextActive: {
-    color: colors.white,
+    color: colors.onAccent,
   },
 
   // Pastel card
@@ -785,7 +874,7 @@ const styles = StyleSheet.create({
   primaryButton: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 28,
@@ -793,7 +882,80 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     fontFamily: fonts.medium,
     fontSize: 16,
-    color: colors.white,
+    color: colors.onAccent,
+  },
+
+  // Upcoming events
+  eventsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'baseline',
+    marginTop: 36,
+    marginBottom: 8,
+    paddingHorizontal: 2,
+  },
+  eventsTitle: {
+    fontFamily: fonts.semibold,
+    fontSize: 18,
+    color: colors.ink,
+  },
+  seeAll: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
+    color: colors.ink,
+  },
+  eventsEmpty: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.muted,
+    paddingHorizontal: 2,
+    paddingTop: 4,
+  },
+  eventRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  eventRowLast: {
+    borderBottomWidth: 0,
+  },
+  dateBadge: {
+    width: 52,
+    height: 52,
+    borderRadius: 16,
+    backgroundColor: tones.brand.bg,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  dateDay: {
+    fontFamily: fonts.medium,
+    fontSize: 18,
+    lineHeight: 22,
+    color: tones.brand.text,
+  },
+  dateMonth: {
+    fontFamily: fonts.regular,
+    fontSize: 10,
+    letterSpacing: 0.8,
+    color: tones.brand.pillText,
+  },
+  eventText: {
+    flex: 1,
+  },
+  eventName: {
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    color: colors.ink,
+  },
+  eventVenue: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.muted,
+    marginTop: 1,
   },
 
   // Empty state
@@ -827,4 +989,4 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: 28,
   },
-});  
+});

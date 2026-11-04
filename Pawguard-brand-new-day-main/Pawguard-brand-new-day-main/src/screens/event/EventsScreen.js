@@ -12,7 +12,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
-import Ionicons from '@expo/vector-icons/Ionicons';
+import Icon from '../../components/Icon';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -236,7 +236,15 @@ export default function EventsScreen() {
       eventRegistrations.some((r) => (r.status || 'pending') === status)
     ) || null;
 
+  // Events that have already ended are hidden. The list is re-checked every
+  // time the screen is focused or refreshed.
+  const hasEnded = (event) => {
+    const end = new Date(event.ends_at).getTime();
+    return !Number.isNaN(end) && end < Date.now();
+  };
+
   const visibleEvents = events.filter((event) => {
+    if (hasEnded(event)) return false;
     if (filter === 'all') return true;
     return getEventRegistrations(event.id).some(
       (r) => (r.status || 'pending') === filter
@@ -250,7 +258,7 @@ export default function EventsScreen() {
     const eventRegistrations = getEventRegistrations(item.id);
 
     const overall = getOverallStatus(eventRegistrations);
-    const tone = tones[STATUS_TONE[overall]] || tones.beige;
+    const tone = tones[STATUS_TONE[overall]] || tones.brand;
 
     return (
       <View style={[styles.card, { backgroundColor: tone.bg }]}>
@@ -281,13 +289,13 @@ export default function EventsScreen() {
           </Text>
 
           <View style={styles.venueRow}>
-            <Ionicons name="location-outline" size={15} color={tone.sub} />
+            <Icon name="location-outline" size={15} color={tone.sub} />
             <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
               {item.venue}
             </Text>
 
             <View style={styles.chevron}>
-              <Ionicons
+              <Icon
                 name={isOpen ? 'chevron-up' : 'chevron-down'}
                 size={18}
                 color={tone.text}
@@ -350,7 +358,7 @@ export default function EventsScreen() {
                 onPress={() => joinEvent(item)}
               >
                 {isJoining ? (
-                  <ActivityIndicator color={colors.white} />
+                  <ActivityIndicator color={colors.onAccent} />
                 ) : (
                   <Text style={styles.joinButtonText}>Register a dog</Text>
                 )}
@@ -464,8 +472,8 @@ const styles = StyleSheet.create({
     borderColor: colors.line,
   },
   chipActive: {
-    backgroundColor: colors.ink,
-    borderColor: colors.ink,
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   chipText: {
     fontFamily: fonts.regular,
@@ -473,11 +481,11 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   chipTextActive: {
-    color: colors.white,
+    color: colors.onAccent,
   },
 
   list: {
-    paddingBottom: 24,
+    paddingBottom: 120,
   },
   emptyContainer: {
     flexGrow: 1,
@@ -598,7 +606,7 @@ const styles = StyleSheet.create({
   joinButton: {
     height: 54,
     borderRadius: 27,
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 18,
@@ -606,7 +614,7 @@ const styles = StyleSheet.create({
   joinButtonText: {
     fontFamily: fonts.medium,
     fontSize: 16,
-    color: colors.white,
+    color: colors.onAccent,
   },
   closedText: {
     fontFamily: fonts.regular,

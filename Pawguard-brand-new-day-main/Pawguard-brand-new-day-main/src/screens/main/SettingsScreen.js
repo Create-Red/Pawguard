@@ -14,7 +14,7 @@ import { colors, fonts, tones } from '../../Theme';
 export default function SettingsScreen() {
   const { profile, signOut } = useAuth();
 
-  const tone = tones.green;
+  const tone = tones.brand;
   const initial = (profile?.name || '?').trim().charAt(0).toUpperCase();
 
   function handleSignOut() {
@@ -140,7 +140,7 @@ const styles = StyleSheet.create({
   logout: {
     height: 56,
     borderRadius: 28,
-    backgroundColor: colors.ink,
+    backgroundColor: colors.accent,
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 24,
@@ -148,6 +148,6 @@ const styles = StyleSheet.create({
   logoutText: {
     fontFamily: fonts.medium,
     fontSize: 16,
-    color: colors.white,
+    color: colors.onAccent,
   },
 });
