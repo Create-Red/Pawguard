@@ -21,6 +21,7 @@ import PairDeviceScreen from '../screens/onboarding/PairDeviceScreen';
 import MapScreen from '../screens/main/MapScreen';
 import EventsScreen from '../screens/event/EventsScreen';
 import TransferDeviceScreen from '../screens/onboarding/TransferDeviceScreen';
+import PublicEventDetailsScreen from '../screens/event/PublicEventDetailsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -132,6 +133,12 @@ export default function MainNavigator() {
         name="Notifications"
         component={NotificationsScreen}
         options={{ title: 'Notifications' }}
+      />
+
+      <Stack.Screen
+        name="PublicEventDetails"
+        component={PublicEventDetailsScreen}
+        options={{ title: 'Event Details' }}
       />
     </Stack.Navigator>
   );

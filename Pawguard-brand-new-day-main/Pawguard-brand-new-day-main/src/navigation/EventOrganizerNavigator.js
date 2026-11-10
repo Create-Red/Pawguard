@@ -4,7 +4,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 
 import EventOrganizerDashboardScreen from '../screens/event/EventOrganizerDashboardScreen';
 import CreateEventScreen from '../screens/event/CreateEventScreen';
-import ManageEventScreen from '../screens/event/ManageEventScreen';
+import ManageEventScreen from '../screens/event/ManageEvents';
 import EventMembersScreen from '../screens/event/EventMembersScreen';
 import EventMonitoringScreen from '../screens/event/EventMonitoringScreen';
 import EventDetailsScreen from '../screens/event/EventDetailsScreen';

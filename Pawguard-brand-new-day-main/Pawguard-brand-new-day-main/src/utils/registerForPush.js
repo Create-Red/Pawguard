@@ -29,39 +29,43 @@ export async function registerForPushNotifications(userId) {
     return null;
   }
 
-  // Android needs a notification channel
-  if (Platform.OS === 'android') {
-    await Notifications.setNotificationChannelAsync('default', {
-      name: 'PawGuard alerts',
-      importance: Notifications.AndroidImportance.MAX,
-      vibrationPattern: [0, 250, 250, 250],
-    });
-  }
-
-  // Ask permission
-  const { status: existing } = await Notifications.getPermissionsAsync();
-  let finalStatus = existing;
-
-  if (existing !== 'granted') {
-    const { status } = await Notifications.requestPermissionsAsync();
-    finalStatus = status;
-  }
-
-  if (finalStatus !== 'granted') {
-    console.log('Notification permission was not granted.');
-    return null;
-  }
-
-  const projectId =
-    Constants.expoConfig?.extra?.eas?.projectId ??
-    Constants.easConfig?.projectId;
-
-  if (!projectId) {
-    console.log('Missing EAS projectId. Run `eas init` first.');
+  if (Platform.OS === 'android' && Constants.expoGoConfig) {
+    console.log('Remote push notifications require an Android development build.');
     return null;
   }
 
   try {
+    // Android needs a notification channel before requesting push permissions.
+    if (Platform.OS === 'android') {
+      await Notifications.setNotificationChannelAsync('default', {
+        name: 'PawGuard alerts',
+        importance: Notifications.AndroidImportance.MAX,
+        vibrationPattern: [0, 250, 250, 250],
+      });
+    }
+
+    const { status: existing } = await Notifications.getPermissionsAsync();
+    let finalStatus = existing;
+
+    if (existing !== 'granted') {
+      const { status } = await Notifications.requestPermissionsAsync();
+      finalStatus = status;
+    }
+
+    if (finalStatus !== 'granted') {
+      console.log('Notification permission was not granted.');
+      return null;
+    }
+
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      Constants.easConfig?.projectId;
+
+    if (!projectId) {
+      console.log('Missing EAS projectId. Run `eas init` first.');
+      return null;
+    }
+
     const { data: token } = await Notifications.getExpoPushTokenAsync({
       projectId,
     });
@@ -77,8 +81,8 @@ export async function registerForPushNotifications(userId) {
     }
 
     return token;
-  } catch (e) {
-    console.log('Push token error:', e.message);
+  } catch (error) {
+    console.warn('Push notification registration failed:', error);
     return null;
   }
 }

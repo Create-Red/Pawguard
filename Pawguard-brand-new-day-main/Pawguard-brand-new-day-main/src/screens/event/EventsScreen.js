@@ -351,7 +351,7 @@ export default function EventsScreen({ navigation }) {
               style={styles.viewButton}
               activeOpacity={0.8}
               onPress={() =>
-                navigation.navigate('EventDetail', { eventId: item.id })
+                navigation.navigate('PublicEventDetails', { eventId: item.id, eventName: item.name })
               }
             >
               <Text style={[styles.viewButtonText, { color: tone.text }]}>
