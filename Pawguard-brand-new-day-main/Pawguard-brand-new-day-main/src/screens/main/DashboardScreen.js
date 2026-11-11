@@ -28,6 +28,7 @@ import { getSelectedDogId, setSelectedDogId } from '../../utils/selectedDog';
 
 const OFFLINE_AFTER_MS = 2 * 60 * 1000;
 const UNREAD_REFRESH_MS = 15 * 1000;
+const EVENTS_REFRESH_MS = 30 * 1000; // fallback in case realtime is off
 const OFFLINE_NOTIFY_COOLDOWN_MS = 60 * 60 * 1000;
 
 const toMillis = (ts) => {
@@ -47,6 +48,38 @@ const timeAgo = (ms, now) => {
   const hr = Math.floor(min / 60);
   if (hr < 24) return `${hr} hr ago`;
   return `${Math.floor(hr / 24)} d ago`;
+};
+
+// Upcoming events this pet is approved for.
+// Returns null on failure so callers can keep what is already on screen.
+const fetchApprovedEvents = async (dogId) => {
+  try {
+    const { data: regs, error: regError } = await supabase
+      .from('event_members')
+      .select('event_id')
+      .eq('dog_id', dogId)
+      .eq('status', 'approved');
+
+    if (regError) throw regError;
+    if (!regs || regs.length === 0) return [];
+
+    const ids = [...new Set(regs.map((r) => r.event_id))];
+
+    const { data: evs, error: evError } = await supabase
+      .from('events')
+      .select('id, name, venue, starts_at, ends_at')
+      .in('id', ids)
+      .order('starts_at', { ascending: true });
+
+    if (evError) throw evError;
+
+    return (evs || []).filter(
+      (e) => new Date(e.ends_at).getTime() >= Date.now()
+    );
+  } catch (e) {
+    console.log('APPROVED EVENTS ERROR:', e.message);
+    return null;
+  }
 };
 
 // Small tile like "Time / Venue" in the reference.
@@ -190,34 +223,8 @@ export default function DashboardScreen({ navigation }) {
         sensorData = data;
       }
 
-      // Events this pet is approved for (upcoming only).
       // A failure here must never break the rest of the dashboard.
-      let eventRows = [];
-      try {
-        const { data: regs, error: regError } = await supabase
-          .from('event_members')
-          .select('event_id')
-          .eq('dog_id', dog.id)
-          .eq('status', 'approved');
-
-        if (!regError && regs && regs.length > 0) {
-          const ids = [...new Set(regs.map((r) => r.event_id))];
-
-          const { data: evs, error: evError } = await supabase
-            .from('events')
-            .select('id, name, venue, starts_at, ends_at')
-            .in('id', ids)
-            .order('starts_at', { ascending: true });
-
-          if (!evError && evs) {
-            eventRows = evs.filter(
-              (e) => new Date(e.ends_at).getTime() >= Date.now()
-            );
-          }
-        }
-      } catch (e) {
-        console.log('APPROVED EVENTS ERROR:', e.message);
-      }
+      const eventRows = await fetchApprovedEvents(dog.id);
 
       if (isStale()) return;
 
@@ -225,10 +232,19 @@ export default function DashboardScreen({ navigation }) {
       // (device present but sensor still empty = brief "Offline" flash).
       setDevice(deviceData);
       setSensor(sensorData);
-      setApprovedEvents(eventRows);
+      if (eventRows !== null) setApprovedEvents(eventRows);
     } finally {
       if (!isStale()) setDogLoading(false);
     }
+  };
+
+  // Reloads only the events list for the pet on screen (no spinner).
+  const refreshApprovedEvents = async (dogId) => {
+    if (!dogId) return;
+    const rows = await fetchApprovedEvents(dogId);
+    // The user may have switched pets while this was loading.
+    if (rows === null || selectedDogRef.current !== dogId) return;
+    setApprovedEvents(rows);
   };
 
   const loadDashboard = async ({ pull = false } = {}) => {
@@ -274,7 +290,7 @@ export default function DashboardScreen({ navigation }) {
     }
   };
 
-  // ---- Realtime ------------------------------------------------------
+  // ---- Realtime: sensor readings ------------------------------------
   useEffect(() => {
     if (!device?.id) return;
 
@@ -299,6 +315,40 @@ export default function DashboardScreen({ navigation }) {
       supabase.removeChannel(channel);
     };
   }, [device?.id]);
+
+  // ---- Realtime: event registrations --------------------------------
+  // When an organizer approves (or rejects / removes) this pet's request,
+  // the "Upcoming events" list updates straight away.
+  useEffect(() => {
+    const dogId = selectedDog?.id;
+    if (!dogId) return;
+
+    const channel = supabase
+      .channel(`event-members-${dogId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*', // INSERT, UPDATE (pending -> approved), DELETE
+          schema: 'public',
+          table: 'event_members',
+          filter: `dog_id=eq.${dogId}`,
+        },
+        () => refreshApprovedEvents(dogId)
+      )
+      .subscribe((s) => console.log('Events realtime status:', s));
+
+    // Fallback: re-check every 30 s in case realtime is not enabled
+    // for the table or the socket drops.
+    const timer = setInterval(
+      () => refreshApprovedEvents(dogId),
+      EVENTS_REFRESH_MS
+    );
+
+    return () => {
+      clearInterval(timer);
+      supabase.removeChannel(channel);
+    };
+  }, [selectedDog?.id]);
 
   // ---- Health alerts -------------------------------------------------
   const createHealthAlert = async (dog, reading, level) => {
@@ -393,19 +443,19 @@ export default function DashboardScreen({ navigation }) {
   }, [status, lastSeen, selectedDog?.id]);
 
   // Silent refresh whenever the tab is focused (no spinner, nothing cleared)
-    useFocusEffect(
-      useCallback(() => {
-        if (profile?.id) {
-          const refreshDashboard = async () => {
-            await loadAlertThresholds(supabase);
-            await loadDashboard();
-            fetchUnreadCount();
-          };
+  useFocusEffect(
+    useCallback(() => {
+      if (profile?.id) {
+        const refreshDashboard = async () => {
+          await loadAlertThresholds(supabase);
+          await loadDashboard();
+          fetchUnreadCount();
+        };
 
-          refreshDashboard();
-        }
-      }, [profile?.id])
-    );
+        refreshDashboard();
+      }
+    }, [profile?.id])
+  );
 
   // ---- First load: one calm spinner instead of a half-empty screen -----
   if (initialLoading) {
@@ -585,6 +635,7 @@ export default function DashboardScreen({ navigation }) {
           </View>
         </TouchableOpacity>
       )}
+
       {/* Readings (like "Event Details" + Time/Venue tiles) */}
       <Text style={styles.sectionTitle}>
         {dogLoading
@@ -829,22 +880,38 @@ const styles = StyleSheet.create({
     fontSize: 12,
     letterSpacing: 0.4,
   },
+  cardIdentity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 20,
+    gap: 14,
+  },
+  petPhoto: {
+    width: 82,
+    height: 82,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+  },
+  petPhotoFallback: {
+    width: 82,
+    height: 82,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  petDetails: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   petName: {
     fontFamily: fonts.medium,
     fontSize: 26,
-    marginTop: 22,
-  },
-  cardBottom: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 6,
   },
   petInfo: {
-    flex: 1,
     fontFamily: fonts.regular,
     fontSize: 14,
-    marginRight: 12,
+    marginTop: 4,
   },
   goButton: {
     width: 36,
@@ -1015,31 +1082,4 @@ const styles = StyleSheet.create({
     alignSelf: 'stretch',
     marginTop: 28,
   },
-  cardIdentity: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  marginTop: 20,
-  gap: 14,
-},
-
-petPhoto: {
-  width: 82,
-  height: 82,
-  borderRadius: 20,
-  backgroundColor: 'rgba(255,255,255,0.6)',
-},
-
-petPhotoFallback: {
-  width: 82,
-  height: 82,
-  borderRadius: 20,
-  backgroundColor: 'rgba(255,255,255,0.6)',
-  justifyContent: 'center',
-  alignItems: 'center',
-},
-
-petDetails: {
-  flex: 1,
-  justifyContent: 'center',
-},
 });
