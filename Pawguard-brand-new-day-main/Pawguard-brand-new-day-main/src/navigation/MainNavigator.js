@@ -1,14 +1,10 @@
 import React from 'react';
 
-import {
-  createNativeStackNavigator,
-} from '@react-navigation/native-stack';
-import {
-  createBottomTabNavigator,
-} from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import { colors, fonts } from '../Theme';
 import CustomTabBar from '../components/CustomTabBar';
+import { stackScreenOptions, tabScreenOptions } from './navOptions';
 
 import DashboardScreen from '../screens/main/DashboardScreen';
 import HistoryScreen from '../screens/main/HistoryScreen';
@@ -29,41 +25,38 @@ const Tab = createBottomTabNavigator();
 function MainTabs() {
   return (
     <Tab.Navigator
-      // Floating glass tab bar (icons + labels live in CustomTabBar.js)
+      // Floating glass tab bar (shared with the organizer side)
       tabBar={(props) => <CustomTabBar {...props} />}
-      screenOptions={{ headerShown: false }}
+      screenOptions={tabScreenOptions}
     >
       <Tab.Screen
         name="Dashboard"
         component={DashboardScreen}
-        options={{ title: 'Home' }}
+        options={{ title: 'Home', tabBarIconName: 'home' }}
       />
 
       <Tab.Screen
         name="History"
         component={HistoryScreen}
-        options={{ title: 'History' }}
+        options={{ title: 'History', tabBarIconName: 'analytics' }}
       />
 
       <Tab.Screen
         name="Events"
         component={EventsScreen}
-        options={{
-          title: 'Events',
-          tabBarLabel: 'Events',
-        }}
+        options={{ title: 'Events', tabBarIconName: 'calendar' }}
       />
 
       <Tab.Screen
         name="Map"
         component={MapScreen}
-        options={{ title: 'Map' }}
+        options={{ title: 'Map', tabBarIconName: 'map' }}
       />
 
       <Tab.Screen
         name="Settings"
         component={SettingsScreen}
-        options={{ title: 'Settings' }}
+        options={{ title: 'Settings', tabBarIconName: 'settings' }}
       />
     </Tab.Navigator>
   );
@@ -71,62 +64,41 @@ function MainTabs() {
 
 export default function MainNavigator() {
   return (
-    <Stack.Navigator
-      // Headers match the rest of the app: flat, white, Urbanist title
-      screenOptions={{
-        headerShadowVisible: false,
-        headerTintColor: colors.ink,
-        headerStyle: { backgroundColor: colors.white },
-        headerTitleStyle: { fontFamily: fonts.semibold, fontSize: 17 },
-        contentStyle: { backgroundColor: colors.white },
-      }}
-    >
+    <Stack.Navigator screenOptions={stackScreenOptions}>
       <Stack.Screen
         name="MainTabs"
         component={MainTabs}
-        options={{
-          headerShown: false,
-        }}
+        options={{ headerShown: false }}
       />
 
       <Stack.Screen
         name="RegisterPet"
         component={RegisterPetScreen}
-        options={{
-          title: 'Register Pet',
-        }}
+        options={{ title: 'Register Pet' }}
       />
 
       <Stack.Screen
         name="EditPet"
         component={EditPetScreen}
-        options={{
-          title: 'Edit Pet',
-        }}
+        options={{ title: 'Edit Pet' }}
       />
 
       <Stack.Screen
         name="DogProfile"
         component={DogProfileScreen}
-        options={{
-          title: 'Pet Profile',
-        }}
+        options={{ title: 'Pet Profile' }}
       />
 
       <Stack.Screen
         name="PairDevice"
         component={PairDeviceScreen}
-        options={{
-          title: 'Pair Device',
-        }}
+        options={{ title: 'Pair Device' }}
       />
 
       <Stack.Screen
         name="TransferDevice"
         component={TransferDeviceScreen}
-        options={{
-          title: 'Transfer Device',
-        }}
+        options={{ title: 'Transfer Device' }}
       />
 
       <Stack.Screen

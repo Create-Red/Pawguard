@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,11 +14,13 @@ import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
+import { getMonitoringPhase } from './EventMonitoringScreen';
 
 const EVENT_TONE = {
   open: 'green',
   ongoing: 'amber',
   completed: 'beige',
+  ended: 'beige',
   cancelled: 'salmon',
 };
 
@@ -55,13 +57,23 @@ function InfoRow({ label, value, last }) {
 export default function EventDetailsScreen({ route, navigation }) {
   const eventId = route?.params?.eventId;
   const { user, profile } = useAuth();
-  const canManageEvent =
-    profile?.role === 'event_organizer' && event?.organizer_id === user?.id;
 
   const [event, setEvent] = useState(null);
   const [counts, setCounts] = useState({ pending: 0, approved: 0, rejected: 0 });
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [now, setNow] = useState(Date.now());
+
+  // (Was declared above useState before, which crashes: "event" didn't exist yet.)
+  const canManageEvent =
+    (profile?.role === 'event_organizer' && event?.organizer_id === user?.id) ||
+    profile?.role === 'system_admin';
+
+  // Re-check every 30 s so the Monitor button unlocks by itself at start time
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30 * 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const loadEvent = useCallback(
     async ({ pull = false } = {}) => {
@@ -102,6 +114,7 @@ export default function EventDetailsScreen({ route, navigation }) {
           approved: active.filter((m) => m.status === 'approved').length,
           rejected: active.filter((m) => m.status === 'rejected').length,
         });
+        setNow(Date.now());
       } catch (error) {
         console.error('Event details error:', error);
         Alert.alert('Unable to load event', error.message);
@@ -119,12 +132,8 @@ export default function EventDetailsScreen({ route, navigation }) {
     }, [loadEvent])
   );
 
-  // Moved here from the events list: one calm place for the destructive action
   function confirmCancel() {
-    if (
-      profile?.role !== 'event_organizer' &&
-      profile?.role !== 'system_admin'
-    ) {
+    if (!canManageEvent) {
       Alert.alert('Access Denied', 'You cannot manage this event.');
       return;
     }
@@ -183,7 +192,10 @@ export default function EventDetailsScreen({ route, navigation }) {
     );
   }
 
-  const tone = tones[EVENT_TONE[event.status]] || tones.brand;
+  const phase = getMonitoringPhase(event, now);
+  const displayStatus =
+    phase === 'ended' ? 'ended' : event.status || 'unknown';
+  const tone = tones[EVENT_TONE[displayStatus]] || tones.brand;
 
   return (
     <ScrollView
@@ -199,7 +211,6 @@ export default function EventDetailsScreen({ route, navigation }) {
         />
       }
     >
-      {/* The one boxed element */}
       <View style={[styles.hero, { backgroundColor: tone.bg }]}>
         <View style={styles.heroTop}>
           <Text style={[styles.heroMeta, { color: tone.sub }]}>
@@ -207,7 +218,7 @@ export default function EventDetailsScreen({ route, navigation }) {
           </Text>
           <View style={[styles.pill, { backgroundColor: tone.pill }]}>
             <Text style={[styles.pillText, { color: tone.pillText }]}>
-              {event.status || 'unknown'}
+              {displayStatus}
             </Text>
           </View>
         </View>
@@ -222,7 +233,46 @@ export default function EventDetailsScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* Participants: counts as plain columns, one primary action */}
+      {/* Live monitoring: only shown to the organizer */}
+      {canManageEvent && phase === 'live' && (
+        <TouchableOpacity
+          style={[styles.liveCard, { backgroundColor: tones.green.bg }]}
+          activeOpacity={0.85}
+          onPress={() =>
+            navigation.navigate('EventMonitoring', {
+              eventId: event.id,
+              eventName: event.name,
+            })
+          }
+        >
+          <View style={[styles.liveIcon]}>
+            <Icon name="pulse" size={22} color={tones.green.text} />
+          </View>
+          <View style={styles.liveTextWrap}>
+            <View style={styles.liveTitleRow}>
+              <Text style={[styles.liveTitle, { color: tones.green.text }]}>
+                Monitor dogs
+              </Text>
+              <View style={[styles.liveDot, { backgroundColor: tones.green.pillText }]} />
+            </View>
+            <Text style={[styles.liveSub, { color: tones.green.sub }]}>
+              Live vitals and map of {counts.approved} approved dog
+              {counts.approved === 1 ? '' : 's'}
+            </Text>
+          </View>
+          <Icon name="chevron-forward" size={18} color={tones.green.text} />
+        </TouchableOpacity>
+      )}
+
+      {canManageEvent && phase === 'upcoming' && (
+        <View style={styles.lockedRow}>
+          <Icon name="time-outline" size={16} color={colors.muted} />
+          <Text style={styles.lockedText}>
+            Live monitoring opens 30 minutes before the event starts.
+          </Text>
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>Participants</Text>
 
       <View style={styles.statsRow}>
@@ -257,23 +307,6 @@ export default function EventDetailsScreen({ route, navigation }) {
         </TouchableOpacity>
       )}
 
-      {canManageEvent && (
-        <TouchableOpacity
-          style={styles.secondaryButton}
-          activeOpacity={0.8}
-          onPress={() =>
-            navigation.navigate('EventMonitoring', {
-              eventId: event.id,
-              eventName: event.name,
-            })
-          }
-        >
-          <Icon name="analytics" size={18} color={colors.ink} />
-          <Text style={styles.secondaryButtonText}>Monitor dogs</Text>
-        </TouchableOpacity>
-      )}
-
-      {/* About + schedule */}
       <Text style={styles.sectionTitle}>About</Text>
       <Text style={styles.description}>
         {event.description || 'No event description provided.'}
@@ -283,7 +316,7 @@ export default function EventDetailsScreen({ route, navigation }) {
       <InfoRow label="Starts" value={formatDateTime(event.starts_at)} />
       <InfoRow label="Ends" value={formatDateTime(event.ends_at)} last />
 
-      {event.status === 'open' && (
+      {canManageEvent && event.status === 'open' && phase !== 'ended' && (
         <TouchableOpacity style={styles.cancelButton} onPress={confirmCancel}>
           <Text style={styles.cancelText}>Cancel event</Text>
         </TouchableOpacity>
@@ -335,6 +368,43 @@ const styles = StyleSheet.create({
   },
   heroVenueText: { flex: 1, fontFamily: fonts.regular, fontSize: 14 },
 
+  // Live monitoring card
+  liveCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderRadius: 24,
+    padding: 16,
+    marginTop: 14,
+  },
+  liveIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  liveTextWrap: { flex: 1 },
+  liveTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  liveTitle: { fontFamily: fonts.medium, fontSize: 17 },
+  liveDot: { width: 8, height: 8, borderRadius: 4 },
+  liveSub: { fontFamily: fonts.regular, fontSize: 13, marginTop: 2 },
+
+  lockedRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 14,
+    paddingHorizontal: 4,
+  },
+  lockedText: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.muted,
+  },
+
   sectionTitle: {
     fontFamily: fonts.semibold,
     fontSize: 18,
@@ -367,17 +437,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.onAccent,
   },
-  secondaryButton: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    gap: 8,
-    height: 50,
-    borderRadius: 25,
-    backgroundColor: colors.pill,
-    marginTop: 10,
-  },
-  secondaryButtonText: { fontFamily: fonts.medium, fontSize: 15, color: colors.ink },
 
   description: {
     fontFamily: fonts.regular,

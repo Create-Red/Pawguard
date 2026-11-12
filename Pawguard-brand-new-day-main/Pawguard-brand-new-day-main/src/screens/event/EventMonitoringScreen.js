@@ -1,27 +1,30 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
-  Linking,
   RefreshControl,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import MapView, { Marker } from 'react-native-maps';
 import { useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
 import Icon from '../../components/Icon';
+import Glass from '../../components/Glass';
 import { supabase } from '../../config/supabase';
-import { useAuth } from '../../context/AuthContext';
 // One risk calculation for the whole app (same as the owner dashboard)
-import { calculateHealthRisk } from '../../utils/healthRisk';
+import { calculateHealthRisk, loadAlertThresholds } from '../../utils/healthRisk';
 import { colors, fonts, tones } from '../../Theme';
 
-const ONLINE_WINDOW_MS = 5 * 60 * 1000;
+const ONLINE_WINDOW_MS = 5 * 60 * 1000;   // reading newer than this = online
+const POLL_MS = 10 * 1000;                // refresh while the screen is open
+const OPENS_EARLY_MS = 30 * 60 * 1000;    // must match the SQL function
 
-// Supabase "timestamp without time zone" values have no "Z" but are UTC.
-// Without this fix, devices in UTC+ timezones look permanently offline.
+// ---- Helpers -------------------------------------------------------------
+
 const toMillis = (ts) => {
   if (!ts) return null;
   const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(ts);
@@ -29,7 +32,6 @@ const toMillis = (ts) => {
   return Number.isNaN(ms) ? null : ms;
 };
 
-// Coarse on purpose, same as the owner dashboard
 const timeAgo = (ms) => {
   if (!ms) return 'No readings';
   const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
@@ -41,16 +43,6 @@ const timeAgo = (ms) => {
   return `${Math.floor(hr / 24)} d ago`;
 };
 
-function getDeviceStatus(device, sensor) {
-  if (!device) return 'NO DEVICE';
-
-  const last = toMillis(sensor?.timestamp_utc);
-  if (last === null) return 'OFFLINE';
-
-  const age = Date.now() - last;
-  return age >= 0 && age <= ONLINE_WINDOW_MS ? 'ONLINE' : 'OFFLINE';
-}
-
 const formatNumber = (value) => {
   const n = Number(value);
   return value === null || value === undefined || value === '' || !Number.isFinite(n)
@@ -58,16 +50,26 @@ const formatNumber = (value) => {
     : n.toFixed(1);
 };
 
-const hasGps = (sensor) => {
-  const lat = Number(sensor?.latitude);
-  const lng = Number(sensor?.longitude);
-  return (
-    sensor?.latitude != null &&
-    sensor?.longitude != null &&
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    !(lat === 0 && lng === 0)
-  );
+const formatDateTime = (value) =>
+  new Date(value).toLocaleString([], {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+// upcoming | live | ended | cancelled
+export const getMonitoringPhase = (event, now = Date.now()) => {
+  if (!event) return 'unknown';
+  if (event.status === 'cancelled') return 'cancelled';
+
+  const start = toMillis(event.starts_at);
+  const end = toMillis(event.ends_at);
+
+  if (end !== null && now > end) return 'ended';
+  if (start !== null && now < start - OPENS_EARLY_MS) return 'upcoming';
+  return 'live';
 };
 
 // Card colour + pill text follow the dog's state
@@ -80,200 +82,295 @@ function getCardStyle(deviceStatus, risk) {
   return { tone: tones.beige, label: 'Unknown' };
 }
 
+// Pin colour on the map
+const pinColorFor = (item) => {
+  if (item.deviceStatus !== 'ONLINE') return colors.muted;
+  if (item.healthRisk === 'HIGH') return colors.danger;
+  if (item.healthRisk === 'MODERATE') return tones.amber.pillText;
+  return tones.green.pillText;
+};
+
 // Most urgent first
 const severity = (item) => {
   if (item.deviceStatus !== 'ONLINE') return 4;
   return { HIGH: 0, MODERATE: 1, LOW: 2 }[item.healthRisk] ?? 3;
 };
 
+// One row from get_event_monitoring -> what the screen needs
+const toItem = (row) => {
+  const lastMs = toMillis(row.reading_at);
+  const sensor = row.reading_at
+    ? {
+        surface_temp: row.surface_temp,
+        ambient_temp: row.ambient_temp,
+        humidity: row.humidity,
+        timestamp_utc: row.reading_at,
+      }
+    : null;
+
+  let deviceStatus = 'NO DEVICE';
+  if (row.device_id) {
+    const age = lastMs === null ? null : Date.now() - lastMs;
+    deviceStatus =
+      age !== null && age >= -60 * 1000 && age <= ONLINE_WINDOW_MS
+        ? 'ONLINE'
+        : 'OFFLINE';
+  }
+
+  const lat = Number(row.gps_lat);
+  const lng = Number(row.gps_lng);
+  const hasGps =
+    row.gps_lat != null && row.gps_lng != null &&
+    Number.isFinite(lat) && Number.isFinite(lng);
+
+  return {
+    id: row.member_id,
+    dogId: row.dog_id,
+    name: row.dog_name || 'Dog',
+    breed: row.breed,
+    ownerName: row.owner_name,
+    battery: row.battery_pct,
+    sensor,
+    lastMs,
+    deviceStatus,
+    // Stale readings are never judged (same rule as the owner dashboard)
+    healthRisk: deviceStatus === 'ONLINE' ? calculateHealthRisk(sensor) : 'UNKNOWN',
+    gps: hasGps ? { latitude: lat, longitude: lng } : null,
+    gpsMs: toMillis(row.gps_at),
+  };
+};
+
+// ---- Small pieces --------------------------------------------------------
+
+function Tiles({ sensor, dim }) {
+  return (
+    <View style={[styles.tiles, dim && styles.dimmed]}>
+      <View style={styles.tile}>
+        <Text style={styles.tileLabel}>Surface</Text>
+        <Text style={styles.tileValue}>
+          {formatNumber(sensor?.surface_temp)}
+          <Text style={styles.tileUnit}>°C</Text>
+        </Text>
+      </View>
+      <View style={styles.tile}>
+        <Text style={styles.tileLabel}>Ambient</Text>
+        <Text style={styles.tileValue}>
+          {formatNumber(sensor?.ambient_temp)}
+          <Text style={styles.tileUnit}>°C</Text>
+        </Text>
+      </View>
+      <View style={styles.tile}>
+        <Text style={styles.tileLabel}>Humidity</Text>
+        <Text style={styles.tileValue}>
+          {formatNumber(sensor?.humidity)}
+          <Text style={styles.tileUnit}>%</Text>
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function PhaseNotice({ phase, event }) {
+  const content = {
+    upcoming: {
+      tone: tones.brand,
+      icon: 'time-outline',
+      title: 'Not started yet',
+      text: event?.starts_at
+        ? `Monitoring opens 30 minutes before the event starts (${formatDateTime(
+            event.starts_at
+          )}).`
+        : 'Monitoring opens shortly before the event starts.',
+    },
+    ended: {
+      tone: tones.beige,
+      icon: 'checkmark-done',
+      title: 'Event has ended',
+      text: 'Live monitoring closed when the event ended.',
+    },
+    cancelled: {
+      tone: tones.salmon,
+      icon: 'close',
+      title: 'Event cancelled',
+      text: 'Monitoring is not available for cancelled events.',
+    },
+  }[phase] || {
+    tone: tones.beige,
+    icon: 'alert-circle',
+    title: 'Monitoring unavailable',
+    text: 'This event could not be loaded.',
+  };
+
+  return (
+    <View style={styles.noticeWrap}>
+      <View style={[styles.noticeIcon, { backgroundColor: content.tone.bg }]}>
+        <Icon name={content.icon} size={36} color={content.tone.text} />
+      </View>
+      <Text style={styles.noticeTitle}>{content.title}</Text>
+      <Text style={styles.noticeText}>{content.text}</Text>
+    </View>
+  );
+}
+
+// ---- Screen --------------------------------------------------------------
+
 export default function EventMonitoringScreen({ route }) {
-  const { user, profile } = useAuth();
-
+  const insets = useSafeAreaInsets();
   const eventId = route?.params?.eventId;
-  const eventName = route?.params?.eventName || 'Event monitoring';
+  const eventNameParam = route?.params?.eventName;
 
+  const [event, setEvent] = useState(null);
+  const [phase, setPhase] = useState('unknown');
   const [dogs, setDogs] = useState([]);
+  const [view, setView] = useState('list'); // 'list' | 'map'
+  const [selectedId, setSelectedId] = useState(null);
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [updatedAt, setUpdatedAt] = useState(null);
 
-  const loadMonitoringData = useCallback(
+  const mapRef = useRef(null);
+  const fittedOnce = useRef(false);
+
+  const load = useCallback(
     async ({ pull = false } = {}) => {
-      if (pull) setRefreshing(true);
-
-      if (!user || !eventId) {
-        setDogs([]);
+      if (!eventId) {
         setInitialLoading(false);
-        setRefreshing(false);
         return;
       }
+      if (pull) setRefreshing(true);
 
       try {
-        // Verify event ownership before loading monitoring information.
-        const { data: event, error: eventError } = await supabase
+        const { data: ev, error: evError } = await supabase
           .from('events')
-          .select('id, organizer_id')
+          .select('id, name, status, starts_at, ends_at, organizer_id')
           .eq('id', eventId)
           .maybeSingle();
 
-        if (eventError) throw eventError;
+        if (evError) throw evError;
+        setEvent(ev);
 
-        const isAdmin = profile?.role === 'system_admin';
+        const currentPhase = getMonitoringPhase(ev);
+        setPhase(currentPhase);
 
-        if (!event || (!isAdmin && event.organizer_id !== user.id)) {
+        if (currentPhase !== 'live') {
           setDogs([]);
-          Alert.alert(
-            'Access denied',
-            'You cannot monitor participants in this event.'
-          );
+          setErrorText('');
           return;
         }
 
-        // Only approved registrations are monitored.
-        const { data: members, error: membersError } = await supabase
-          .from('event_members')
-          .select('id, dog_id, owner_id, status')
-          .eq('event_id', eventId)
-          .eq('status', 'approved');
-
-        if (membersError) throw membersError;
-
-        if (!members?.length) {
-          setDogs([]);
-          return;
-        }
-
-        const dogIds = [...new Set(members.map((m) => m.dog_id))];
-        const ownerIds = [...new Set(members.map((m) => m.owner_id))];
-
-        const [dogsResult, ownersResult] = await Promise.all([
-          supabase.from('dogs').select('id, name, breed, age').in('id', dogIds),
-          supabase.from('profiles').select('id, name').in('id', ownerIds),
-        ]);
-
-        if (dogsResult.error) throw dogsResult.error;
-        if (ownersResult.error) throw ownersResult.error;
-
-        const dogMap = new Map((dogsResult.data || []).map((d) => [d.id, d]));
-        const ownerMap = new Map((ownersResult.data || []).map((o) => [o.id, o]));
-
-        const { data: devices, error: devicesError } = await supabase
-          .from('devices')
-          .select('id, dog_id, status, firmware_version, battery_pct')
-          .in('dog_id', dogIds);
-
-        if (devicesError) throw devicesError;
-
-        const deviceMap = new Map((devices || []).map((d) => [d.dog_id, d]));
-        const deviceIds = (devices || []).map((d) => d.id);
-        let readings = [];
-
-        if (deviceIds.length > 0) {
-          const { data, error } = await supabase
-            .from('sensor_data')
-            .select(`
-              id,
-              device_id,
-              surface_temp,
-              ambient_temp,
-              humidity,
-              timestamp_utc,
-              latitude,
-              longitude
-            `)
-            .in('device_id', deviceIds)
-            .order('timestamp_utc', { ascending: false });
-
-          if (error) throw error;
-          readings = data || [];
-        }
-
-        // The first reading for each device is its newest reading.
-        const latestReadingMap = new Map();
-        for (const reading of readings) {
-          if (!latestReadingMap.has(reading.device_id)) {
-            latestReadingMap.set(reading.device_id, reading);
-          }
-        }
-
-        const result = members.map((member) => {
-          const dog = dogMap.get(member.dog_id) || null;
-          const owner = ownerMap.get(member.owner_id) || null;
-          const device = deviceMap.get(member.dog_id) || null;
-          const sensor = device ? latestReadingMap.get(device.id) || null : null;
-          const deviceStatus = getDeviceStatus(device, sensor);
-
-          return {
-            id: member.id,
-            dog,
-            owner,
-            device,
-            sensor,
-            deviceStatus,
-            // Stale readings are never judged (same rule as the owner dashboard)
-            healthRisk:
-              deviceStatus === 'ONLINE' ? calculateHealthRisk(sensor) : 'UNKNOWN',
-          };
+        const { data, error } = await supabase.rpc('get_event_monitoring', {
+          p_event_id: eventId,
         });
 
-        result.sort(
-          (a, b) =>
-            severity(a) - severity(b) ||
-            (a.dog?.name || '').localeCompare(b.dog?.name || '')
+        if (error) {
+          if (error.message?.includes('MONITORING_CLOSED')) {
+            // Server clock says closed: before the window or after the end
+            const start = toMillis(ev?.starts_at);
+            setPhase(start !== null && Date.now() < start ? 'upcoming' : 'ended');
+            setDogs([]);
+            return;
+          }
+          throw error;
+        }
+
+        const items = (data || []).map(toItem);
+        items.sort(
+          (a, b) => severity(a) - severity(b) || a.name.localeCompare(b.name)
         );
 
-        setDogs(result);
-      } catch (error) {
-        console.error('Event monitoring error:', error);
-        Alert.alert(
-          'Unable to load monitoring data',
-          error.message || 'Check your database permissions and try again.'
-        );
+        setDogs(items);
+        setErrorText('');
+        setUpdatedAt(Date.now());
+      } catch (e) {
+        console.log('EVENT MONITORING ERROR:', e.message);
+        setErrorText(e.message || 'Unable to load monitoring data.');
       } finally {
         setInitialLoading(false);
         setRefreshing(false);
       }
     },
-    [user?.id, eventId, profile?.role]
+    [eventId]
   );
 
+  // Load on focus, then keep refreshing every 10 s while the screen is open.
   useFocusEffect(
     useCallback(() => {
-      loadMonitoringData();
-    }, [loadMonitoringData])
+      let timer;
+      let active = true;
+
+      (async () => {
+        await loadAlertThresholds(supabase);
+        if (!active) return;
+        await load();
+        if (active) timer = setInterval(() => load(), POLL_MS);
+      })();
+
+      return () => {
+        active = false;
+        if (timer) clearInterval(timer);
+      };
+    }, [load])
   );
 
-  const openLocation = async (sensor) => {
-    if (!hasGps(sensor)) {
-      Alert.alert(
-        'Location unavailable',
-        'No valid GPS coordinates are available for this dog.'
+  // ---- Map helpers ------------------------------------------------------
+  const withGps = dogs.filter((d) => d.gps);
+  const selected = dogs.find((d) => d.id === selectedId) || null;
+
+  const fitAll = useCallback(() => {
+    const coords = withGps.map((d) => d.gps);
+    if (!mapRef.current || coords.length === 0) return;
+
+    if (coords.length === 1) {
+      mapRef.current.animateToRegion(
+        { ...coords[0], latitudeDelta: 0.01, longitudeDelta: 0.01 },
+        400
       );
-      return;
+    } else {
+      mapRef.current.fitToCoordinates(coords, {
+        edgePadding: { top: 80, right: 60, bottom: 280, left: 60 },
+        animated: true,
+      });
     }
+  }, [withGps]);
 
-    const url = `https://www.google.com/maps/search/?api=1&query=${Number(
-      sensor.latitude
-    )},${Number(sensor.longitude)}`;
-
-    try {
-      await Linking.openURL(url);
-    } catch {
-      Alert.alert('Error', 'Unable to open the map.');
+  // Fit the map to all dogs the first time it has something to show
+  useEffect(() => {
+    if (view === 'map' && !fittedOnce.current && withGps.length > 0) {
+      fittedOnce.current = true;
+      setTimeout(fitAll, 300);
     }
+  }, [view, withGps.length, fitAll]);
+
+  const showOnMap = (item) => {
+    setSelectedId(item.id);
+    setView('map');
+    setTimeout(() => {
+      mapRef.current?.animateToRegion(
+        { ...item.gps, latitudeDelta: 0.005, longitudeDelta: 0.005 },
+        400
+      );
+    }, 350);
   };
 
-  const renderDog = ({ item }) => {
-    const { dog, owner, device, sensor, deviceStatus, healthRisk } = item;
-    const { tone, label } = getCardStyle(deviceStatus, healthRisk);
-    const online = deviceStatus === 'ONLINE';
+  // ---- Summary ----------------------------------------------------------
+  const online = dogs.filter((d) => d.deviceStatus === 'ONLINE').length;
+  const high = dogs.filter((d) => d.healthRisk === 'HIGH').length;
+  const moderate = dogs.filter((d) => d.healthRisk === 'MODERATE').length;
 
-    const subtitle = [owner?.name, dog?.breed].filter(Boolean).join('  ·  ');
+  // ---- Renderers --------------------------------------------------------
+  const renderDog = ({ item }) => {
+    const { tone, label } = getCardStyle(item.deviceStatus, item.healthRisk);
+    const isOnline = item.deviceStatus === 'ONLINE';
+    const subtitle = [item.ownerName, item.breed].filter(Boolean).join('  ·  ');
 
     return (
       <View style={[styles.card, { backgroundColor: tone.bg }]}>
         <View style={styles.cardTop}>
-          <Text style={[styles.cardMeta, { color: tone.sub }]}>
-            {device ? `Last reading ${timeAgo(toMillis(sensor?.timestamp_utc))}` : 'No device paired'}
+          <Text style={[styles.cardMeta, { color: tone.sub }]} numberOfLines={1}>
+            {item.deviceStatus === 'NO DEVICE'
+              ? 'No device paired'
+              : `Last reading ${timeAgo(item.lastMs)}`}
           </Text>
           <View style={[styles.pill, { backgroundColor: tone.pill }]}>
             <Text style={[styles.pillText, { color: tone.pillText }]}>{label}</Text>
@@ -281,65 +378,42 @@ export default function EventMonitoringScreen({ route }) {
         </View>
 
         <Text style={[styles.dogName, { color: tone.text }]} numberOfLines={1}>
-          {dog?.name || 'Dog unavailable'}
+          {item.name}
         </Text>
         <Text style={[styles.subtitle, { color: tone.sub }]} numberOfLines={1}>
           {subtitle || 'Owner unavailable'}
         </Text>
 
-        <View style={[styles.tiles, !online && styles.dimmed]}>
-          <View style={styles.tile}>
-            <Text style={styles.tileLabel}>Surface</Text>
-            <Text style={styles.tileValue}>
-              {formatNumber(sensor?.surface_temp)}
-              <Text style={styles.tileUnit}>°C</Text>
-            </Text>
-          </View>
-          <View style={styles.tile}>
-            <Text style={styles.tileLabel}>Ambient</Text>
-            <Text style={styles.tileValue}>
-              {formatNumber(sensor?.ambient_temp)}
-              <Text style={styles.tileUnit}>°C</Text>
-            </Text>
-          </View>
-          <View style={styles.tile}>
-            <Text style={styles.tileLabel}>Humidity</Text>
-            <Text style={styles.tileValue}>
-              {formatNumber(sensor?.humidity)}
-              <Text style={styles.tileUnit}>%</Text>
-            </Text>
-          </View>
-        </View>
+        <Tiles sensor={item.sensor} dim={!isOnline} />
 
         <View style={styles.cardBottom}>
           <View style={styles.battery}>
-            <Icon name="battery" size={16} color={tone.sub} />
+            <Icon name="battery-half" size={16} color={tone.sub} />
             <Text style={[styles.batteryText, { color: tone.sub }]}>
-              {device?.battery_pct != null
-                ? `${Number(device.battery_pct)}%`
-                : '--'}
+              {item.battery != null ? `${Number(item.battery)}%` : '--'}
             </Text>
           </View>
 
-          {hasGps(sensor) ? (
+          {item.gps ? (
             <TouchableOpacity
               style={styles.locationButton}
               activeOpacity={0.8}
-              onPress={() => openLocation(sensor)}
+              onPress={() => showOnMap(item)}
             >
-              <Icon name="navigate-outline" size={15} color={tone.text} />
+              <Icon name="map-outline" size={15} color={tone.text} />
               <Text style={[styles.locationText, { color: tone.text }]}>
-                Open location
+                Show on map
               </Text>
             </TouchableOpacity>
           ) : (
-            <Text style={[styles.noGps, { color: tone.sub }]}>No GPS</Text>
+            <Text style={[styles.noGps, { color: tone.sub }]}>No GPS yet</Text>
           )}
         </View>
       </View>
     );
   };
 
+  // ---- States -----------------------------------------------------------
   if (initialLoading) {
     return (
       <View style={styles.center}>
@@ -348,45 +422,212 @@ export default function EventMonitoringScreen({ route }) {
     );
   }
 
+  const title = event?.name || eventNameParam || 'Event monitoring';
+
+  if (phase !== 'live') {
+    return (
+      <View style={styles.container}>
+        <View style={styles.heading}>
+          <Text style={styles.title} numberOfLines={1}>{title}</Text>
+        </View>
+        <PhaseNotice phase={phase} event={event} />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
+      {/* Header: title, live summary, list/map toggle */}
       <View style={styles.heading}>
-        <Text style={styles.title} numberOfLines={1}>
-          {eventName}
-        </Text>
+        <View style={styles.titleRow}>
+          <Text style={[styles.title, styles.titleFlex]} numberOfLines={1}>
+            {title}
+          </Text>
+          <View style={[styles.livePill, { backgroundColor: tones.green.pill }]}>
+            <View style={[styles.liveDot, { backgroundColor: tones.green.pillText }]} />
+            <Text style={[styles.livePillText, { color: tones.green.pillText }]}>
+              Live
+            </Text>
+          </View>
+        </View>
+
         <Text style={styles.headingSub}>
-          Approved dogs, most urgent first.
+          {dogs.length} dog{dogs.length === 1 ? '' : 's'}  ·  {online} online
+          {high > 0 ? `  ·  ${high} high risk` : ''}
+          {moderate > 0 ? `  ·  ${moderate} moderate` : ''}
         </Text>
+
+        <View style={styles.segment}>
+          {[
+            { key: 'list', label: 'List', icon: 'list' },
+            { key: 'map', label: 'Map', icon: 'map' },
+          ].map((opt) => {
+            const active = view === opt.key;
+            return (
+              <TouchableOpacity
+                key={opt.key}
+                style={[styles.segmentItem, active && styles.segmentActive]}
+                onPress={() => setView(opt.key)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Icon
+                  name={opt.icon}
+                  size={16}
+                  color={active ? colors.onAccent : colors.ink}
+                />
+                <Text
+                  style={[styles.segmentText, active && styles.segmentTextActive]}
+                >
+                  {opt.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {!!errorText && <Text style={styles.errorText}>{errorText}</Text>}
       </View>
 
-      <FlatList
-        data={dogs}
-        keyExtractor={(item) => item.id}
-        renderItem={renderDog}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={dogs.length === 0 ? styles.emptyContainer : styles.list}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            tintColor={colors.ink}
-            colors={[colors.ink]}
-            onRefresh={() => loadMonitoringData({ pull: true })}
-          />
-        }
-        ListEmptyComponent={
-          <Text style={styles.emptyText}>
-            No approved participants are available to monitor yet.
-          </Text>
-        }
-        ListFooterComponent={
-          dogs.length > 0 ? (
-            <Text style={styles.footnote}>
-              Risk levels are preliminary alerts based on configured thresholds,
-              not a veterinary diagnosis.
+      {view === 'list' ? (
+        <FlatList
+          data={dogs}
+          keyExtractor={(item) => item.id}
+          renderItem={renderDog}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={
+            dogs.length === 0 ? styles.emptyContainer : styles.list
+          }
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              tintColor={colors.ink}
+              colors={[colors.ink]}
+              onRefresh={() => load({ pull: true })}
+            />
+          }
+          ListEmptyComponent={
+            <Text style={styles.emptyText}>
+              No approved participants to monitor yet.
             </Text>
-          ) : null
-        }
-      />
+          }
+          ListFooterComponent={
+            dogs.length > 0 ? (
+              <Text style={styles.footnote}>
+                Updates every 10 seconds
+                {updatedAt ? ` · last ${timeAgo(updatedAt).toLowerCase()}` : ''}.
+                {'\n'}Risk levels are preliminary alerts based on configured
+                thresholds, not a veterinary diagnosis.
+              </Text>
+            ) : null
+          }
+        />
+      ) : (
+        <View style={styles.mapWrap}>
+          <MapView
+            ref={mapRef}
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSelectedId(null)}
+            initialRegion={
+              withGps[0]
+                ? { ...withGps[0].gps, latitudeDelta: 0.02, longitudeDelta: 0.02 }
+                : undefined
+            }
+          >
+            {withGps.map((item) => (
+              <Marker
+                key={item.id}
+                coordinate={item.gps}
+                pinColor={pinColorFor(item)}
+                onPress={(e) => {
+                  e.stopPropagation?.();
+                  setSelectedId(item.id);
+                }}
+              />
+            ))}
+          </MapView>
+
+          {/* Fit all dogs */}
+          {withGps.length > 0 && (
+            <TouchableOpacity
+              style={[styles.fitButton, { top: 12 }]}
+              onPress={fitAll}
+              accessibilityLabel="Show all dogs"
+            >
+              <Icon name="scan" size={18} color={colors.ink} />
+            </TouchableOpacity>
+          )}
+
+          {/* Bottom panel: selected dog, or a summary */}
+          <Glass
+            radius={30}
+            intensity={60}
+            style={[styles.mapPanel, { bottom: Math.max(insets.bottom, 16) }]}
+          >
+            {selected ? (
+              (() => {
+                const { tone, label } = getCardStyle(
+                  selected.deviceStatus,
+                  selected.healthRisk
+                );
+                return (
+                  <>
+                    <View style={styles.cardTop}>
+                      <Text
+                        style={[styles.cardMeta, { color: colors.muted }]}
+                        numberOfLines={1}
+                      >
+                        GPS {timeAgo(selected.gpsMs).toLowerCase()}
+                      </Text>
+                      <View style={[styles.pill, { backgroundColor: tone.pill }]}>
+                        <Text style={[styles.pillText, { color: tone.pillText }]}>
+                          {label}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.panelName} numberOfLines={1}>
+                      {selected.name}
+                    </Text>
+                    <Text style={styles.panelSub} numberOfLines={1}>
+                      {[selected.ownerName, selected.breed]
+                        .filter(Boolean)
+                        .join('  ·  ') || 'Owner unavailable'}
+                    </Text>
+                    <Tiles
+                      sensor={selected.sensor}
+                      dim={selected.deviceStatus !== 'ONLINE'}
+                    />
+                  </>
+                );
+              })()
+            ) : (
+              <>
+                <Text style={styles.panelName}>
+                  {withGps.length} of {dogs.length} on the map
+                </Text>
+                <Text style={styles.panelSub}>
+                  {withGps.length === 0
+                    ? 'Waiting for collars to send GPS.'
+                    : 'Tap a pin to see that dog’s vitals.'}
+                </Text>
+                <View style={styles.legend}>
+                  {[
+                    { color: tones.green.pillText, text: 'Low' },
+                    { color: tones.amber.pillText, text: 'Moderate' },
+                    { color: colors.danger, text: 'High' },
+                    { color: colors.muted, text: 'Offline' },
+                  ].map((l) => (
+                    <View key={l.text} style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: l.color }]} />
+                      <Text style={styles.legendText}>{l.text}</Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </Glass>
+        </View>
+      )}
     </View>
   );
 }
@@ -400,15 +641,82 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
   },
 
-  heading: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
+  // Header
+  heading: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 14 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   title: { fontFamily: fonts.medium, fontSize: 28, color: colors.ink },
+  titleFlex: { flex: 1 },
   headingSub: {
     fontFamily: fonts.regular,
     fontSize: 14,
     color: colors.muted,
     marginTop: 4,
   },
+  livePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    height: 28,
+    borderRadius: 14,
+  },
+  liveDot: { width: 7, height: 7, borderRadius: 4 },
+  livePillText: { fontFamily: fonts.medium, fontSize: 12, letterSpacing: 0.4 },
 
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: colors.pill,
+    borderRadius: 22,
+    padding: 4,
+    marginTop: 14,
+  },
+  segmentItem: {
+    flex: 1,
+    height: 36,
+    borderRadius: 18,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  segmentActive: { backgroundColor: colors.accent },
+  segmentText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
+  segmentTextActive: { color: colors.onAccent },
+
+  errorText: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.danger,
+    marginTop: 10,
+  },
+
+  // Phase notice (not live)
+  noticeWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 30,
+    paddingBottom: 60,
+  },
+  noticeIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 18,
+  },
+  noticeTitle: { fontFamily: fonts.medium, fontSize: 22, color: colors.ink },
+  noticeText: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.muted,
+    textAlign: 'center',
+    marginTop: 8,
+  },
+
+  // List
   list: { paddingHorizontal: 20, paddingBottom: 40 },
   emptyContainer: { flexGrow: 1, justifyContent: 'center' },
   emptyText: {
@@ -503,4 +811,46 @@ const styles = StyleSheet.create({
   },
   locationText: { fontFamily: fonts.medium, fontSize: 13 },
   noGps: { fontFamily: fonts.regular, fontSize: 13 },
+
+  // Map
+  mapWrap: { flex: 1 },
+  fitButton: {
+    position: 'absolute',
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 3,
+  },
+  mapPanel: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 18,
+  },
+  panelName: {
+    fontFamily: fonts.medium,
+    fontSize: 22,
+    color: colors.ink,
+    marginTop: 10,
+  },
+  panelSub: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 14, marginTop: 14 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  legendDot: { width: 10, height: 10, borderRadius: 5 },
+  legendText: { fontFamily: fonts.regular, fontSize: 12, color: colors.ink },
 });

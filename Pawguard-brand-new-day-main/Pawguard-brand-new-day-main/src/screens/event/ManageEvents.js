@@ -20,7 +20,19 @@ const EVENT_TONE = {
   open: 'green',
   ongoing: 'amber',
   completed: 'beige',
+  ended: 'beige',
   cancelled: 'salmon',
+};
+
+// What the card shows. An event whose end time has passed shows "ended"
+// (unless it was cancelled), whatever its saved status is.
+const getDisplayStatus = (event) => {
+  if (event.status === 'cancelled') return 'cancelled';
+
+  const end = new Date(event.ends_at).getTime();
+  if (!Number.isNaN(end) && end < Date.now()) return 'ended';
+
+  return event.status || 'unknown';
 };
 
 const formatLongDate = (value) =>
@@ -39,6 +51,7 @@ export default function ManageEventsScreen({ navigation }) {
   const [participantCounts, setParticipantCounts] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [busyId, setBusyId] = useState(null); // event being cancelled / deleted
 
   const loadEvents = useCallback(
     async ({ pull = false } = {}) => {
@@ -111,87 +124,205 @@ export default function ManageEventsScreen({ navigation }) {
     }, [loadEvents])
   );
 
+  // ---- X button: cancel or delete -------------------------------------
+  const cancelEvent = async (event) => {
+    setBusyId(event.id);
 
-const renderEvent = ({ item }) => {
-  const tone = tones[EVENT_TONE[item.status]] || tones.brand;
-  const counts = participantCounts[item.id] || {
-    total: 0,
-    pending: 0,
-    approved: 0,
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .update({ status: 'cancelled' })
+        .eq('id', event.id)
+        .select('id');
+
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error('You do not have permission to change this event.');
+      }
+
+      // Update the card right away
+      setEvents((prev) =>
+        prev.map((e) => (e.id === event.id ? { ...e, status: 'cancelled' } : e))
+      );
+    } catch (error) {
+      console.error('CANCEL EVENT ERROR:', error);
+      Alert.alert('Could not cancel event', error.message);
+    } finally {
+      setBusyId(null);
+    }
   };
 
-  return (
-    <View style={[styles.card, { backgroundColor: tone.bg }]}>
-      <TouchableOpacity
-        activeOpacity={0.8}
-        onPress={() =>
-          navigation.navigate('EventDetails', {
-            eventId: item.id,
-          })
-        }
+  const deleteEvent = async (event) => {
+    setBusyId(event.id);
+
+    try {
+      const { error } = await supabase.rpc('delete_event', {
+        p_event_id: event.id,
+      });
+
+      if (error) throw error;
+
+      setEvents((prev) => prev.filter((e) => e.id !== event.id));
+      setParticipantCounts((prev) => {
+        const next = { ...prev };
+        delete next[event.id];
+        return next;
+      });
+    } catch (error) {
+      console.error('DELETE EVENT ERROR:', error);
+      Alert.alert('Could not delete event', error.message);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const confirmDelete = (event, counts) => {
+    const people =
+      counts.total > 0
+        ? ` Its ${counts.total} registration${counts.total === 1 ? '' : 's'} will also be removed.`
+        : '';
+
+    Alert.alert(
+      'Delete permanently?',
+      `"${event.name}" will be deleted for good.${people} This can't be undone.`,
+      [
+        { text: 'Keep', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => deleteEvent(event),
+        },
+      ]
+    );
+  };
+
+  const handleRemovePress = (event, counts) => {
+    const shown = getDisplayStatus(event);
+    const canCancel =
+      shown !== 'cancelled' && shown !== 'completed' && shown !== 'ended';
+
+    Alert.alert(
+      event.name,
+      canCancel
+        ? 'Cancel keeps the event and its participants on record. Delete removes everything.'
+        : 'Delete removes this event and its registrations for good.',
+      [
+        { text: 'Keep', style: 'cancel' },
+        ...(canCancel
+          ? [{ text: 'Cancel event', onPress: () => cancelEvent(event) }]
+          : []),
+        {
+          text: 'Delete permanently',
+          style: 'destructive',
+          onPress: () => confirmDelete(event, counts),
+        },
+      ]
+    );
+  };
+
+  const renderEvent = ({ item }) => {
+    const displayStatus = getDisplayStatus(item);
+    const tone = tones[EVENT_TONE[displayStatus]] || tones.brand;
+    const counts = participantCounts[item.id] || {
+      total: 0,
+      pending: 0,
+      approved: 0,
+    };
+    const busy = busyId === item.id;
+
+    return (
+      <View
+        style={[
+          styles.card,
+          { backgroundColor: tone.bg },
+          busy && styles.dimmed,
+        ]}
       >
-        <View style={styles.cardTop}>
-          <Text style={[styles.cardDate, { color: tone.sub }]}>
-            {formatLongDate(item.starts_at)}
-          </Text>
-
-          <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
-            <Text style={[styles.statusPillText, { color: tone.pillText }]}>
-              {item.status || 'unknown'}
-            </Text>
-          </View>
-        </View>
-
-        <Text
-          style={[styles.eventName, { color: tone.text }]}
-          numberOfLines={2}
+        <TouchableOpacity
+          activeOpacity={0.8}
+          disabled={busy}
+          onPress={() =>
+            navigation.navigate('EventDetails', {
+              eventId: item.id,
+            })
+          }
         >
-          {item.name}
-        </Text>
+          <View style={styles.cardTop}>
+            <Text style={[styles.cardDate, { color: tone.sub }]}>
+              {formatLongDate(item.starts_at)}
+            </Text>
 
-        <View style={styles.venueRow}>
-          <Icon name="location-outline" size={15} color={tone.sub} />
-          <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
-            {item.venue || 'Venue not specified'}
+            <View style={styles.topRight}>
+              <View style={[styles.statusPill, { backgroundColor: tone.pill }]}>
+                <Text style={[styles.statusPillText, { color: tone.pillText }]}>
+                  {displayStatus}
+                </Text>
+              </View>
+
+              {/* X: cancel or delete */}
+              <TouchableOpacity
+                style={styles.closeButton}
+                onPress={() => handleRemovePress(item, counts)}
+                disabled={busy}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel={`Cancel or delete ${item.name}`}
+              >
+                {busy ? (
+                  <ActivityIndicator size="small" color={tone.text} />
+                ) : (
+                  <Icon name="close" size={16} color={tone.text} />
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <Text
+            style={[styles.eventName, { color: tone.text }]}
+            numberOfLines={2}
+          >
+            {item.name}
           </Text>
-        </View>
 
-        <Text style={[styles.counts, { color: tone.text }]}>
-          {counts.approved} approved
-          {'  ·  '}
-          {counts.pending} pending
-        </Text>
-      </TouchableOpacity>
-
-      {/* Participant management button */}
-      <TouchableOpacity
-        activeOpacity={0.85}
-        style={styles.manageParticipantsButton}
-        onPress={() =>
-          navigation.navigate('EventMembers', {
-            eventId: item.id,
-            eventName: item.name,
-          })
-        }
-      >
-        <Icon name="people-outline" size={18} color={colors.onAccent} />
-
-        <Text style={styles.manageParticipantsText}>
-          Manage Participants
-        </Text>
-
-        {counts.pending > 0 && (
-          <View style={styles.pendingBadge}>
-            <Text style={styles.pendingBadgeText}>
-              {counts.pending}
+          <View style={styles.venueRow}>
+            <Icon name="location-outline" size={15} color={tone.sub} />
+            <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
+              {item.venue || 'Venue not specified'}
             </Text>
           </View>
-        )}
-      </TouchableOpacity>
-    </View>
-  );
-};
 
+          <Text style={[styles.counts, { color: tone.text }]}>
+            {counts.approved} approved
+            {'  ·  '}
+            {counts.pending} pending
+          </Text>
+        </TouchableOpacity>
+
+        {/* Participant management button */}
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.manageParticipantsButton}
+          disabled={busy}
+          onPress={() =>
+            navigation.navigate('EventMembers', {
+              eventId: item.id,
+              eventName: item.name,
+            })
+          }
+        >
+          <Icon name="people-outline" size={18} color={colors.onAccent} />
+
+          <Text style={styles.manageParticipantsText}>Manage Participants</Text>
+
+          {counts.pending > 0 && (
+            <View style={styles.pendingBadge}>
+              <Text style={styles.pendingBadgeText}>{counts.pending}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
+      </View>
+    );
+  };
 
   if (initialLoading) {
     return (
@@ -299,10 +430,16 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
     marginBottom: 16,
   },
+  dimmed: { opacity: 0.6 },
   cardTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+  },
+  topRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   cardDate: { fontFamily: fonts.regular, fontSize: 14 },
   statusPill: {
@@ -312,6 +449,14 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   statusPillText: { fontFamily: fonts.medium, fontSize: 12, letterSpacing: 0.4 },
+  closeButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   eventName: {
     fontFamily: fonts.medium,
     fontSize: 24,
@@ -325,20 +470,10 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   venue: { flex: 1, fontFamily: fonts.regular, fontSize: 14 },
-  cardBottom: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+  counts: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
     marginTop: 16,
-  },
-  counts: { flex: 1, fontFamily: fonts.medium, fontSize: 14, marginRight: 12 },
-  goButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
 
   // Empty state
@@ -374,36 +509,34 @@ const styles = StyleSheet.create({
     color: colors.onAccent,
   },
 
+  // Manage participants button
   manageParticipantsButton: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 9,
-  height: 48,
-  borderRadius: 24,
-  backgroundColor: colors.accent,
-  marginTop: 18,
-},
-
-manageParticipantsText: {
-  fontFamily: fonts.medium,
-  fontSize: 14,
-  color: colors.onAccent,
-},
-
-pendingBadge: {
-  minWidth: 23,
-  height: 23,
-  borderRadius: 12,
-  backgroundColor: colors.white,
-  alignItems: 'center',
-  justifyContent: 'center',
-  paddingHorizontal: 5,
-},
-
-pendingBadgeText: {
-  fontFamily: fonts.medium,
-  fontSize: 12,
-  color: colors.danger,
-},
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 9,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.accent,
+    marginTop: 18,
+  },
+  manageParticipantsText: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
+    color: colors.onAccent,
+  },
+  pendingBadge: {
+    minWidth: 23,
+    height: 23,
+    borderRadius: 12,
+    backgroundColor: colors.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  pendingBadgeText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    color: colors.danger,
+  },
 });

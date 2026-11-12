@@ -5,9 +5,12 @@ import Icon from './Icon';
 import Glass from './Glass';
 import { colors, fonts } from '../Theme';
 
-// Map YOUR tab route names to an icon + label.
+// Fallback icons/labels by route name. Tabs normally set their own with
+// options={{ title: 'Home', tabBarIconName: 'home' }} in the navigator,
+// so this list only matters for tabs that don't.
 const TAB_CONFIG = {
   Dashboard: { icon: 'home', label: 'Home' },
+  EventOrganizerDashboard: { icon: 'home', label: 'Home' },
   Home: { icon: 'home', label: 'Home' },
   History: { icon: 'analytics', label: 'History' },
   Events: { icon: 'calendar', label: 'Events' },
@@ -15,6 +18,21 @@ const TAB_CONFIG = {
   Notifications: { icon: 'notifications', label: 'Alerts' },
   Profile: { icon: 'person', label: 'Profile' },
   Settings: { icon: 'settings', label: 'Settings' },
+};
+
+// Icon + label for a tab: navigator options first, then the fallback list.
+const getTabInfo = (route, options) => {
+  const fallback = TAB_CONFIG[route.name] || {};
+
+  const label =
+    (typeof options.tabBarLabel === 'string' && options.tabBarLabel) ||
+    options.title ||
+    fallback.label ||
+    route.name;
+
+  const icon = options.tabBarIconName || fallback.icon || 'ellipse';
+
+  return { icon, label };
 };
 
 // Floating glass bar. Screens need ~110px bottom padding so content can
@@ -30,7 +48,8 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
       <Glass radius={32} intensity={60} style={styles.bar}>
         {state.routes.map((route, index) => {
           const focused = state.index === index;
-          const cfg = TAB_CONFIG[route.name] || { icon: 'ellipse', label: route.name };
+          const { options } = descriptors[route.key];
+          const { icon, label } = getTabInfo(route, options);
 
           const onPress = () => {
             const event = navigation.emit({
@@ -48,15 +67,15 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               activeOpacity={0.8}
               accessibilityRole="button"
               accessibilityState={focused ? { selected: true } : {}}
-              accessibilityLabel={descriptors[route.key].options.tabBarAccessibilityLabel}
+              accessibilityLabel={options.tabBarAccessibilityLabel || label}
               style={[styles.item, focused && styles.itemActive]}
             >
               <Icon
-                name={cfg.icon}
+                name={icon}
                 size={21}
                 color={focused ? colors.onAccent : 'rgba(47,45,41,0.55)'}
               />
-              {focused && <Text style={styles.label}>{cfg.label}</Text>}
+              {focused && <Text style={styles.label}>{label}</Text>}
             </TouchableOpacity>
           );
         })}

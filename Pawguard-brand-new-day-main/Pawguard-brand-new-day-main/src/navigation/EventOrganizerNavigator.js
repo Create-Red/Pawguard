@@ -1,9 +1,10 @@
 import React from 'react';
+
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
-import Icon from '../components/Icon';
-import { colors, fonts } from '../Theme';
+import CustomTabBar from '../components/CustomTabBar';
+import { stackScreenOptions, tabScreenOptions } from './navOptions';
 
 import EventOrganizerDashboardScreen from '../screens/event/EventOrganizerDashboardScreen';
 import CreateEventScreen from '../screens/event/CreateEventScreen';
@@ -12,60 +13,38 @@ import EventMembersScreen from '../screens/event/EventMembersScreen';
 import EventMonitoringScreen from '../screens/event/EventMonitoringScreen';
 import EventDetailsScreen from '../screens/event/EventDetailsScreen';
 import ParticipantProfileScreen from '../screens/event/ParticipantProfileScreen';
-
-// Same Settings screen the pet owners use.
-// ⚠️ Change this path if your SettingsScreen.js is in a different folder
-// (copy the import line from the pet owner's navigator).
 import SettingsScreen from '../screens/main/SettingsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-// Bottom tabs: Home (dashboard) + Settings
+// Same floating tab bar as the pet owner side
 function OrganizerTabs() {
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: false,
-        tabBarActiveTintColor: colors.ink,
-        tabBarInactiveTintColor: colors.muted,
-        tabBarLabelStyle: {
-          fontFamily: fonts.medium,
-          fontSize: 12,
-        },
-        tabBarStyle: {
-          backgroundColor: colors.white,
-          borderTopColor: colors.line,
-        },
-        tabBarIcon: ({ focused, color, size }) => {
-          const name =
-            route.name === 'Settings'
-              ? focused ? 'settings' : 'settings-outline'
-              : focused ? 'home' : 'home-outline';
-          return <Icon name={name} size={size} color={color} />;
-        },
-      })}
+      tabBar={(props) => <CustomTabBar {...props} />}
+      screenOptions={tabScreenOptions}
     >
       <Tab.Screen
         name="EventOrganizerDashboard"
         component={EventOrganizerDashboardScreen}
-        options={{ title: 'Home' }}
+        options={{ title: 'Home', tabBarIconName: 'home' }}
       />
 
       <Tab.Screen
         name="Settings"
         component={SettingsScreen}
-        options={{ title: 'Settings' }}
+        options={{ title: 'Settings', tabBarIconName: 'settings' }}
       />
     </Tab.Navigator>
   );
 }
 
-// The tabs sit at the bottom of the stack. Every other screen opens on top
-// of them (full screen, with a back button), exactly like before.
+// Tabs at the bottom of the stack; every other screen opens on top of them
+// with the same flat white header as the pet owner side.
 export default function EventOrganizerNavigator() {
   return (
-    <Stack.Navigator>
+    <Stack.Navigator screenOptions={stackScreenOptions}>
       <Stack.Screen
         name="OrganizerTabs"
         component={OrganizerTabs}
