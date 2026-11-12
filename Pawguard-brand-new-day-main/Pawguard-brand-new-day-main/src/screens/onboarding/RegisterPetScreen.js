@@ -1,10 +1,12 @@
-
 import React, { useState } from 'react';
 
 import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -14,8 +16,33 @@ import {
 
 import * as ImagePicker from 'expo-image-picker';
 
+import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { colors, fonts, tones } from '../../Theme';
+
+// Labeled input styled like the dashboard's info tiles (same as Login / Sign up).
+function Field({ label, focused, error, hint, ...inputProps }) {
+  return (
+    <View>
+      <View
+        style={[
+          styles.field,
+          focused && styles.fieldFocused,
+          error && styles.fieldError,
+        ]}
+      >
+        <Text style={styles.fieldLabel}>{label}</Text>
+        <TextInput
+          style={styles.input}
+          placeholderTextColor={colors.muted}
+          {...inputProps}
+        />
+      </View>
+      {!!hint && <Text style={styles.hint}>{hint}</Text>}
+    </View>
+  );
+}
 
 export default function RegisterPetScreen({ navigation }) {
   const { user } = useAuth();
@@ -24,7 +51,22 @@ export default function RegisterPetScreen({ navigation }) {
   const [breed, setBreed] = useState('');
   const [age, setAge] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
+  const [focused, setFocused] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [errorField, setErrorField] = useState(null); // 'name' | 'age' | null
+
+  const showError = (message, field = null) => {
+    setError(message);
+    setErrorField(field);
+  };
+
+  const clearError = () => {
+    if (error) {
+      setError('');
+      setErrorField(null);
+    }
+  };
 
   async function pickImage() {
     try {
@@ -33,7 +75,7 @@ export default function RegisterPetScreen({ navigation }) {
 
       if (!permission.granted) {
         Alert.alert(
-          'Permission Required',
+          'Permission required',
           'Please allow PawGuard to access your photo gallery.'
         );
         return;
@@ -49,37 +91,32 @@ export default function RegisterPetScreen({ navigation }) {
       if (!result.canceled && result.assets?.length > 0) {
         setSelectedImage(result.assets[0]);
       }
-    } catch (error) {
-      console.error('Image picker error:', error);
+    } catch (e) {
+      console.error('Image picker error:', e);
       Alert.alert('Error', 'Unable to open your photo gallery.');
     }
   }
 
   async function registerPet() {
     if (!user?.id) {
-      Alert.alert('Not Logged In', 'Please log in again.');
+      Alert.alert('Not logged in', 'Please log in again.');
       return;
     }
 
     if (!name.trim()) {
-      Alert.alert(
-        'Missing Information',
-        "Please enter your dog's name."
-      );
+      showError("Please enter your pet's name.", 'name');
       return;
     }
 
-    if (age.trim() && (
-      !Number.isInteger(Number(age)) ||
-      Number(age) < 0
-    )) {
-      Alert.alert(
-        'Invalid Age',
-        'Please enter a valid age.'
-      );
+    if (
+      age.trim() &&
+      (!Number.isInteger(Number(age)) || Number(age) < 0)
+    ) {
+      showError('Please enter a valid age in whole years.', 'age');
       return;
     }
 
+    clearError();
     setLoading(true);
 
     let uploadedPath = null;
@@ -112,9 +149,7 @@ export default function RegisterPetScreen({ navigation }) {
             upsert: false,
           });
 
-        if (uploadError) {
-          throw uploadError;
-        }
+        if (uploadError) throw uploadError;
 
         const { data: publicURLData } = supabase.storage
           .from('dog-photos')
@@ -124,7 +159,7 @@ export default function RegisterPetScreen({ navigation }) {
       }
 
       // Register dog
-      const { data, error } = await supabase
+      const { data, error: insertError } = await supabase
         .from('dogs')
         .insert({
           owner_id: user.id,
@@ -136,235 +171,348 @@ export default function RegisterPetScreen({ navigation }) {
         .select()
         .single();
 
-      if (error) {
+      if (insertError) {
         // Remove uploaded photo if dog registration fails
         if (uploadedPath) {
-          await supabase.storage
-            .from('dog-photos')
-            .remove([uploadedPath]);
+          await supabase.storage.from('dog-photos').remove([uploadedPath]);
         }
-
-        throw error;
+        throw insertError;
       }
 
-      console.log('DOG CREATED:', data);
-
       Alert.alert(
-        'Pet Registered',
+        'Pet registered',
         `${data.name} has been added to PawGuard.`,
-        [
-          {
-            text: 'OK',
-            onPress: () => navigation.goBack(),
-          },
-        ]
+        [{ text: 'OK', onPress: () => navigation.goBack() }]
       );
-    } catch (error) {
-      console.error('REGISTER PET ERROR:', error);
-
-      Alert.alert(
-        'Registration Failed',
-        error.message || 'Unable to register your pet.'
-      );
+    } catch (e) {
+      console.error('REGISTER PET ERROR:', e);
+      showError(e.message || 'Unable to register your pet.');
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>
-        Register Your Pet
-      </Text>
-
-      <Text style={styles.subtitle}>
-        Add your dog to PawGuard.
-      </Text>
-
-      {/* Dog Photo */}
-      <TouchableOpacity
-        style={styles.photoContainer}
-        onPress={pickImage}
-        disabled={loading}
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+    >
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {selectedImage ? (
-          <Image
-            source={{ uri: selectedImage.uri }}
-            style={styles.photo}
-          />
-        ) : (
-          <View style={styles.photoPlaceholder}>
-            <Text style={styles.photoIcon}>📷</Text>
-            <Text style={styles.photoText}>
-              Add Dog Photo
-            </Text>
-            <Text style={styles.photoHint}>
-              Tap to choose from gallery
-            </Text>
-          </View>
-        )}
-      </TouchableOpacity>
+        <Text style={styles.title}>Register pet</Text>
+        <Text style={styles.subtitle}>
+          Add your dog to PawGuard to start monitoring.
+        </Text>
 
-      {selectedImage && (
+        {/* Photo card */}
+        <View style={[styles.photoCard, { backgroundColor: tones.brand.bg }]}>
+          <TouchableOpacity
+            activeOpacity={0.85}
+            style={styles.photoBox}
+            onPress={pickImage}
+            disabled={loading}
+            accessibilityRole="button"
+            accessibilityLabel={selectedImage ? 'Change photo' : 'Add photo'}
+          >
+            {selectedImage ? (
+              <Image
+                source={{ uri: selectedImage.uri }}
+                style={styles.photo}
+                resizeMode="cover"
+              />
+            ) : (
+              <Icon name="paw" size={36} color={tones.brand.text} />
+            )}
+
+            <View style={styles.photoBadge}>
+              <Icon name="add" size={18} color={colors.onAccent} />
+            </View>
+          </TouchableOpacity>
+
+          <View style={styles.photoText}>
+            <Text style={[styles.photoTitle, { color: tones.brand.text }]}>
+              {selectedImage ? 'Looking good!' : 'Add a photo'}
+            </Text>
+            <Text style={[styles.photoHint, { color: tones.brand.pillText }]}>
+              {selectedImage
+                ? 'Tap the photo to change it.'
+                : 'Optional. Tap to choose from your gallery.'}
+            </Text>
+
+            {selectedImage && (
+              <TouchableOpacity
+                style={styles.removeButton}
+                onPress={() => setSelectedImage(null)}
+                disabled={loading}
+              >
+                <Text style={[styles.removeText, { color: tones.brand.text }]}>
+                  Remove
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {/* Form */}
+        <View style={styles.form}>
+          <Field
+            label="Name"
+            placeholder="e.g. Bantay"
+            value={name}
+            onChangeText={(t) => {
+              setName(t);
+              clearError();
+            }}
+            autoCapitalize="words"
+            returnKeyType="next"
+            editable={!loading}
+            focused={focused === 'name'}
+            error={errorField === 'name'}
+            onFocus={() => setFocused('name')}
+            onBlur={() => setFocused(null)}
+          />
+
+          <View style={styles.row}>
+            <View style={styles.rowWide}>
+              <Field
+                label="Breed"
+                placeholder="e.g. Aspin"
+                value={breed}
+                onChangeText={setBreed}
+                autoCapitalize="words"
+                returnKeyType="next"
+                editable={!loading}
+                focused={focused === 'breed'}
+                onFocus={() => setFocused('breed')}
+                onBlur={() => setFocused(null)}
+              />
+            </View>
+
+            <View style={styles.rowNarrow}>
+              <Field
+                label="Age (yrs)"
+                placeholder="0"
+                value={age}
+                onChangeText={(t) => {
+                  setAge(t.replace(/[^0-9]/g, ''));
+                  clearError();
+                }}
+                keyboardType="number-pad"
+                maxLength={2}
+                returnKeyType="done"
+                onSubmitEditing={registerPet}
+                editable={!loading}
+                focused={focused === 'age'}
+                error={errorField === 'age'}
+                onFocus={() => setFocused('age')}
+                onBlur={() => setFocused(null)}
+              />
+            </View>
+          </View>
+
+          <Text style={styles.hint}>Breed and age are optional.</Text>
+
+          {!!error && <Text style={styles.errorText}>{error}</Text>}
+        </View>
+
         <TouchableOpacity
-          onPress={() => setSelectedImage(null)}
+          style={[styles.primaryButton, loading && styles.dimmed]}
+          onPress={registerPet}
+          disabled={loading}
+          accessibilityRole="button"
+        >
+          {loading ? (
+            <ActivityIndicator color={colors.onAccent} />
+          ) : (
+            <Text style={styles.primaryButtonText}>Register pet</Text>
+          )}
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.cancelButton}
+          onPress={() => navigation.goBack()}
           disabled={loading}
         >
-          <Text style={styles.removePhoto}>
-            Remove Photo
-          </Text>
+          <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
-      )}
-
-      <TextInput
-        style={styles.input}
-        placeholder="Dog Name"
-        value={name}
-        onChangeText={setName}
-      />
-
-      <TextInput
-        style={styles.input}
-        placeholder="Breed"
-        value={breed}
-        onChangeText={setBreed}
-      />
-
-      <TextInput
-        style={styles.input}
-        placeholder="Age"
-        value={age}
-        onChangeText={setAge}
-        keyboardType="numeric"
-      />
-
-      <TouchableOpacity
-        style={[
-          styles.button,
-          loading && styles.disabledButton,
-        ]}
-        onPress={registerPet}
-        disabled={loading}
-      >
-        {loading ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>
-            Register Pet
-          </Text>
-        )}
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={styles.cancelButton}
-        onPress={() => navigation.goBack()}
-        disabled={loading}
-      >
-        <Text style={styles.cancelText}>
-          Cancel
-        </Text>
-      </TouchableOpacity>
-    </View>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    padding: 24,
-    justifyContent: 'center',
-    backgroundColor: '#fff',
+    backgroundColor: colors.white,
+  },
+  content: {
+    flexGrow: 1,
+    paddingHorizontal: 20,
+    paddingTop: 24,
+    paddingBottom: 40,
   },
 
   title: {
+    fontFamily: fonts.medium,
     fontSize: 28,
-    fontWeight: '800',
-    marginBottom: 8,
+    color: colors.ink,
   },
-
   subtitle: {
-    color: '#666',
-    marginBottom: 20,
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 21,
+    color: colors.muted,
+    marginTop: 6,
   },
 
-  photoContainer: {
-    alignSelf: 'center',
-    width: 150,
-    height: 150,
-    borderRadius: 18,
-    overflow: 'hidden',
-    marginBottom: 12,
-    backgroundColor: '#F1F3F5',
+  // Photo card
+  photoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    borderRadius: 30,
+    padding: 18,
+    marginTop: 24,
   },
-
-  photo: {
-    width: '100%',
-    height: '100%',
-  },
-
-  photoPlaceholder: {
-    flex: 1,
+  photoBox: {
+    width: 96,
+    height: 96,
+    borderRadius: 24,
+    backgroundColor: 'rgba(255,255,255,0.6)',
     justifyContent: 'center',
     alignItems: 'center',
   },
-
-  photoIcon: {
-    fontSize: 32,
-    marginBottom: 6,
+  photo: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 24,
   },
-
+  photoBadge: {
+    position: 'absolute',
+    right: -6,
+    bottom: -6,
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.accent,
+    borderWidth: 2,
+    borderColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   photoText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#222',
+    flex: 1,
   },
-
+  photoTitle: {
+    fontFamily: fonts.medium,
+    fontSize: 20,
+  },
   photoHint: {
-    fontSize: 10,
-    color: '#777',
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    lineHeight: 19,
     marginTop: 4,
   },
-
-  removePhoto: {
-    color: '#DC2626',
-    textAlign: 'center',
-    marginBottom: 12,
-    fontWeight: '600',
+  removeButton: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingHorizontal: 14,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.6)',
+  },
+  removeText: {
+    fontFamily: fonts.medium,
+    fontSize: 12,
+    letterSpacing: 0.4,
   },
 
+  // Form
+  form: {
+    marginTop: 24,
+    gap: 12,
+  },
+  row: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  rowWide: {
+    flex: 2,
+  },
+  rowNarrow: {
+    flex: 1,
+  },
+  field: {
+    backgroundColor: colors.tile,
+    borderRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    borderWidth: 2,
+    borderColor: 'transparent',
+  },
+  fieldFocused: {
+    borderColor: colors.accent,
+  },
+  fieldError: {
+    borderColor: colors.danger,
+  },
+  fieldLabel: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    letterSpacing: 0.6,
+    color: colors.tileLabel,
+  },
   input: {
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 12,
-    padding: 15,
-    marginBottom: 14,
+    fontFamily: fonts.medium,
     fontSize: 16,
+    color: colors.ink,
+    paddingVertical: Platform.OS === 'ios' ? 6 : 2,
+    paddingHorizontal: 0,
+  },
+  hint: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    color: colors.muted,
+    paddingHorizontal: 4,
+  },
+  errorText: {
+    fontFamily: fonts.regular,
+    fontSize: 13,
+    color: colors.danger,
+    paddingHorizontal: 4,
   },
 
-  button: {
-    backgroundColor: '#222',
-    padding: 16,
-    borderRadius: 12,
+  // Buttons
+  primaryButton: {
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.accent,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 5,
+    marginTop: 28,
   },
-
-  disabledButton: {
-    opacity: 0.6,
-  },
-
-  buttonText: {
-    color: '#fff',
-    fontWeight: '700',
+  primaryButtonText: {
+    fontFamily: fonts.medium,
     fontSize: 16,
+    color: colors.onAccent,
   },
-
+  dimmed: {
+    opacity: 0.5,
+  },
   cancelButton: {
-    padding: 16,
+    height: 52,
+    justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 6,
   },
-
   cancelText: {
-    fontWeight: '600',
+    fontFamily: fonts.medium,
+    fontSize: 15,
+    color: colors.ink,
   },
 });
