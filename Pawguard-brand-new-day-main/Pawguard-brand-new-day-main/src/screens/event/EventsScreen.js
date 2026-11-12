@@ -13,6 +13,7 @@ import {
   View,
 } from 'react-native';
 import Icon from '../../components/Icon';
+import Avatar from '../../components/Avatar';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -52,6 +53,7 @@ export default function EventsScreen({ navigation }) {
 
   const [events, setEvents] = useState([]);
   const [registrations, setRegistrations] = useState([]);
+  const [organizers, setOrganizers] = useState({}); // id -> { name, avatar_url }
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [joiningId, setJoiningId] = useState(null);
@@ -63,10 +65,30 @@ export default function EventsScreen({ navigation }) {
     setExpandedId((current) => (current === id ? null : id));
   };
 
+  // Organizer name + photo. A failure here never blocks the event list.
+  const loadOrganizers = async (eventRows) => {
+    const ids = [
+      ...new Set(eventRows.map((e) => e.organizer_id).filter(Boolean)),
+    ];
+    if (ids.length === 0) return;
+
+    const { data, error } = await supabase.rpc('get_public_profiles', { ids });
+
+    if (error) {
+      console.log('ORGANIZERS ERROR:', error.message);
+      return;
+    }
+
+    setOrganizers(
+      Object.fromEntries((data || []).map((p) => [p.id, p]))
+    );
+  };
+
   const loadEvents = useCallback(async () => {
     if (!user) {
       setEvents([]);
       setRegistrations([]);
+      setOrganizers({});
       setLoading(false);
       setRefreshing(false);
       return;
@@ -103,8 +125,11 @@ export default function EventsScreen({ navigation }) {
       if (eventsResult.error) throw eventsResult.error;
       if (registrationsResult.error) throw registrationsResult.error;
 
-      setEvents(eventsResult.data || []);
+      const eventRows = eventsResult.data || [];
+      setEvents(eventRows);
       setRegistrations(registrationsResult.data || []);
+
+      await loadOrganizers(eventRows);
     } catch (error) {
       console.error('Load events and registrations error:', error);
       Alert.alert(
@@ -132,10 +157,12 @@ export default function EventsScreen({ navigation }) {
     try {
       setJoiningId(event.id);
 
+      // Archived pets can't join events.
       const { data: dogs, error } = await supabase
         .from('dogs')
         .select('id, name')
-        .eq('owner_id', user.id);
+        .eq('owner_id', user.id)
+        .eq('is_archived', false);
 
       if (error) throw error;
 
@@ -260,15 +287,20 @@ export default function EventsScreen({ navigation }) {
     const overall = getOverallStatus(eventRegistrations);
     const tone = tones[STATUS_TONE[overall]] || tones.brand;
 
+    const organizer = organizers[item.organizer_id];
+    const organizerName = organizer?.name || 'Event organizer';
+
     return (
       <View style={[styles.card, { backgroundColor: tone.bg }]}>
-        {/* Always visible: date, status, title, location */}
+        {/* Always visible: date, status, title, location, organizer */}
         <TouchableOpacity
           activeOpacity={0.85}
           onPress={() => toggleExpanded(item.id)}
           accessibilityRole="button"
           accessibilityState={{ expanded: isOpen }}
-          accessibilityLabel={`${item.name}, ${isOpen ? 'hide' : 'show'} details`}
+          accessibilityLabel={`${item.name}, hosted by ${organizerName}, ${
+            isOpen ? 'hide' : 'show'
+          } details`}
         >
           <View style={styles.cardTop}>
             <Text style={[styles.cardDate, { color: tone.sub }]}>
@@ -293,6 +325,28 @@ export default function EventsScreen({ navigation }) {
             <Text style={[styles.venue, { color: tone.sub }]} numberOfLines={1}>
               {item.venue}
             </Text>
+          </View>
+
+          {/* Organizer */}
+          <View style={styles.organizerRow}>
+            <Avatar
+              uri={organizer?.avatar_url}
+              name={organizerName}
+              size={34}
+              bg="rgba(255,255,255,0.6)"
+              color={tone.text}
+            />
+            <View style={styles.organizerText}>
+              <Text style={[styles.hostedBy, { color: tone.sub }]}>
+                Hosted by
+              </Text>
+              <Text
+                style={[styles.organizerName, { color: tone.text }]}
+                numberOfLines={1}
+              >
+                {organizerName}
+              </Text>
+            </View>
 
             <View style={styles.chevron}>
               <Icon
@@ -351,7 +405,10 @@ export default function EventsScreen({ navigation }) {
               style={styles.viewButton}
               activeOpacity={0.8}
               onPress={() =>
-                navigation.navigate('PublicEventDetails', { eventId: item.id, eventName: item.name })
+                navigation.navigate('PublicEventDetails', {
+                  eventId: item.id,
+                  eventName: item.name,
+                })
               }
             >
               <Text style={[styles.viewButtonText, { color: tone.text }]}>
@@ -555,6 +612,27 @@ const styles = StyleSheet.create({
     flex: 1,
     fontFamily: fonts.regular,
     fontSize: 14,
+  },
+
+  // Organizer
+  organizerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 16,
+  },
+  organizerText: {
+    flex: 1,
+  },
+  hostedBy: {
+    fontFamily: fonts.regular,
+    fontSize: 11,
+    letterSpacing: 0.4,
+  },
+  organizerName: {
+    fontFamily: fonts.medium,
+    fontSize: 14,
+    marginTop: 1,
   },
   chevron: {
     width: 32,
