@@ -21,7 +21,8 @@ export default function MapScreen({ route }) {
   const [loading, setLoading] = useState(true);
 
   // ---------------------------------------------------------
-  // Load latest GPS location
+  // Load latest GPS location (readings belong to the DOG,
+  // so a lent or transferred device never shows another dog's trail)
   // ---------------------------------------------------------
 
   const loadLatestLocation = async () => {
@@ -31,28 +32,10 @@ export default function MapScreen({ route }) {
     }
 
     try {
-      // Get device for this dog
-      const { data: device, error: deviceError } = await supabase
-        .from('devices')
-        .select('*')
-        .eq('dog_id', dog.id)
-        .maybeSingle();
-
-      if (deviceError) {
-        console.log('DEVICE ERROR:', deviceError.message);
-        return;
-      }
-
-      if (!device) {
-        console.log('No device found for dog.');
-        return;
-      }
-
-      // Get latest sensor/GPS reading
       const { data, error } = await supabase
         .from('sensor_data')
         .select('*')
-        .eq('device_id', device.id)
+        .eq('dog_id', dog.id)
         .not('latitude', 'is', null)
         .not('longitude', 'is', null)
         .order('timestamp_utc', { ascending: false })
@@ -79,54 +62,37 @@ export default function MapScreen({ route }) {
   }, [dog?.id]);
 
   // ---------------------------------------------------------
-  // Realtime GPS updates
+  // Realtime GPS updates (by dog)
   // ---------------------------------------------------------
 
   useEffect(() => {
     if (!dog?.id) return;
 
-    let channel;
+    const channel = supabase
+      .channel(`gps-${dog.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'sensor_data',
+          filter: `dog_id=eq.${dog.id}`,
+        },
+        (payload) => {
+          const newData = payload.new;
 
-    const setupRealtime = async () => {
-      const { data: device } = await supabase
-        .from('devices')
-        .select('id')
-        .eq('dog_id', dog.id)
-        .maybeSingle();
-
-      if (!device) return;
-
-      channel = supabase
-        .channel(`gps-${device.id}`)
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'sensor_data',
-            filter: `device_id=eq.${device.id}`,
-          },
-          (payload) => {
-            const newData = payload.new;
-
-            // Only update map if GPS exists
-            if (newData.latitude != null && newData.longitude != null) {
-              console.log('📍 New GPS:', newData.latitude, newData.longitude);
-              setSensor(newData);
-            }
+          // Only update map if GPS exists
+          if (newData.latitude != null && newData.longitude != null) {
+            setSensor(newData);
           }
-        )
-        .subscribe((status) => {
-          console.log('GPS Realtime:', status);
-        });
-    };
-
-    setupRealtime();
+        }
+      )
+      .subscribe((status) => {
+        console.log('GPS Realtime:', status);
+      });
 
     return () => {
-      if (channel) {
-        supabase.removeChannel(channel);
-      }
+      supabase.removeChannel(channel);
     };
   }, [dog?.id]);
 

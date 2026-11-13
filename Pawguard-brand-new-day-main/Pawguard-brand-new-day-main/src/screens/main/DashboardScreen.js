@@ -73,9 +73,12 @@ const fetchApprovedEvents = async (dogId) => {
 
     if (evError) throw evError;
 
-    return (evs || []).filter(
-      (e) => new Date(e.ends_at).getTime() >= Date.now()
-    );
+    // Keep an event unless we know for sure it has ended.
+    // (A missing ends_at used to count as "ended in 1970" and hide it.)
+    return (evs || []).filter((e) => {
+      const end = new Date(e.ends_at || e.starts_at).getTime();
+      return Number.isNaN(end) || end >= Date.now();
+    });
   } catch (e) {
     console.log('APPROVED EVENTS ERROR:', e.message);
     return null;
@@ -210,11 +213,12 @@ export default function DashboardScreen({ navigation }) {
 
       let sensorData = null;
 
+      // Readings belong to the DOG (a device can move between dogs)
       if (deviceData) {
         const { data } = await supabase
           .from('sensor_data')
           .select('*')
-          .eq('device_id', deviceData.id)
+          .eq('dog_id', dog.id)
           .order('timestamp_utc', { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -291,20 +295,24 @@ export default function DashboardScreen({ navigation }) {
   };
 
   // ---- Realtime: sensor readings ------------------------------------
+  // Listens by dog, so a reading from a device that was just moved to
+  // another dog never shows up here.
   useEffect(() => {
-    if (!device?.id) return;
+    const dogId = selectedDog?.id;
+    if (!dogId || !device?.id) return;
 
     const channel = supabase
-      .channel(`sensor-data-${device.id}`)
+      .channel(`sensor-data-${dogId}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'sensor_data',
-          filter: `device_id=eq.${device.id}`,
+          filter: `dog_id=eq.${dogId}`,
         },
         (payload) => {
+          if (selectedDogRef.current !== dogId) return;
           setSensor(payload.new);
           setNow(Date.now());
         }
@@ -314,7 +322,7 @@ export default function DashboardScreen({ navigation }) {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [device?.id]);
+  }, [selectedDog?.id, device?.id]);
 
   // ---- Realtime: event registrations --------------------------------
   // When an organizer approves (or rejects / removes) this pet's request,

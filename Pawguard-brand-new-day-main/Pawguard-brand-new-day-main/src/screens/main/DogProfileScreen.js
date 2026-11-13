@@ -35,10 +35,19 @@ export default function DogProfileScreen({ route, navigation }) {
   const [device, setDevice] = useState(null);
   const [loading, setLoading] = useState(true);
   const [archiving, setArchiving] = useState(false);
+  const [removingDevice, setRemovingDevice] = useState(false);
 
   useEffect(() => {
     loadDog();
   }, [dogId]);
+
+  // Reload when coming back from Pair / Transfer
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (!loading) loadDog();
+    });
+    return unsubscribe;
+  }, [navigation, loading]);
 
   async function loadDog() {
     try {
@@ -53,19 +62,17 @@ export default function DogProfileScreen({ route, navigation }) {
 
       setDog(data);
 
-      const { data: deviceData, error: deviceError } =
-        await supabase
-          .from('devices')
-          .select('id, device_uid, status, firmware_version, battery_pct')
-          .eq('dog_id', dogId)
-          .maybeSingle();
+      const { data: deviceData, error: deviceError } = await supabase
+        .from('devices')
+        .select('id, device_uid, status, firmware_version, battery_pct')
+        .eq('dog_id', dogId)
+        .maybeSingle();
 
       if (deviceError) throw deviceError;
 
       setDevice(deviceData);
     } catch (error) {
       console.log('DOG PROFILE ERROR:', error.message);
-
       Alert.alert('Error', 'Unable to load pet information.');
       navigation.goBack();
     } finally {
@@ -73,17 +80,45 @@ export default function DogProfileScreen({ route, navigation }) {
     }
   }
 
+  // ---- Remove device -------------------------------------------------
+  function confirmRemoveDevice() {
+    Alert.alert(
+      'Remove device?',
+      `${device.device_uid} will be unpaired from ${dog.name}. ` +
+        `${dog.name} will stop receiving readings and location.\n\n` +
+        'You or anyone you lend it to can pair it again with its Device ID.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Remove', style: 'destructive', onPress: removeDevice },
+      ]
+    );
+  }
+
+  async function removeDevice() {
+    setRemovingDevice(true);
+
+    const { error } = await supabase.rpc('unpair_device', {
+      p_device_id: device.id,
+    });
+
+    setRemovingDevice(false);
+
+    if (error) {
+      Alert.alert('Could not remove device', error.message);
+      return;
+    }
+
+    setDevice(null);
+  }
+
+  // ---- Archive pet -----------------------------------------------------
   function confirmArchive() {
     Alert.alert(
       'Archive Dog',
       `Are you sure you want to remove ${dog.name} from your active pets? Its event records and sensor history will be preserved. Any paired device will be unpaired.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Archive',
-          style: 'destructive',
-          onPress: archiveDog,
-        },
+        { text: 'Archive', style: 'destructive', onPress: archiveDog },
       ]
     );
   }
@@ -102,16 +137,9 @@ export default function DogProfileScreen({ route, navigation }) {
       return;
     }
 
-    Alert.alert(
-      'Dog Archived',
-      `${dog.name} has been removed from your active pets.`,
-      [
-        {
-          text: 'OK',
-          onPress: () => navigation.goBack(),
-        },
-      ]
-    );
+    Alert.alert('Dog Archived', `${dog.name} has been removed from your active pets.`, [
+      { text: 'OK', onPress: () => navigation.goBack() },
+    ]);
   }
 
   if (loading) {
@@ -132,6 +160,7 @@ export default function DogProfileScreen({ route, navigation }) {
   }
 
   const tone = device ? tones.brand : tones.beige;
+  const busy = removingDevice || archiving;
 
   return (
     <ScrollView
@@ -152,16 +181,16 @@ export default function DogProfileScreen({ route, navigation }) {
 
         <View style={styles.identity}>
           {dog.photo_url ? (
-  <Image
-    source={{ uri: dog.photo_url }}
-    style={styles.avatar}
-    resizeMode="cover"
-  />
-) : (
-  <View style={styles.avatar}>
-    <Icon name="paw" size={28} color={tone.text} />
-  </View>
-)}
+            <Image
+              source={{ uri: dog.photo_url }}
+              style={styles.avatar}
+              resizeMode="cover"
+            />
+          ) : (
+            <View style={styles.avatar}>
+              <Icon name="paw" size={28} color={tone.text} />
+            </View>
+          )}
           <Text style={[styles.name, { color: tone.text }]} numberOfLines={2}>
             {dog.name}
           </Text>
@@ -172,10 +201,7 @@ export default function DogProfileScreen({ route, navigation }) {
         <View style={styles.heroRow}>
           <View style={styles.heroCol}>
             <Text style={[styles.heroColLabel, { color: tone.sub }]}>Breed</Text>
-            <Text
-              style={[styles.heroColValue, { color: tone.text }]}
-              numberOfLines={1}
-            >
+            <Text style={[styles.heroColValue, { color: tone.text }]} numberOfLines={1}>
               {dog.breed || 'Not specified'}
             </Text>
           </View>
@@ -200,32 +226,54 @@ export default function DogProfileScreen({ route, navigation }) {
           <InfoRow label="Status" value={device.status || 'Unknown'} />
           <InfoRow
             label="Battery"
-            value={
-              device.battery_pct != null ? `${device.battery_pct}%` : '--'
-            }
+            value={device.battery_pct != null ? `${device.battery_pct}%` : '--'}
             last={!device.firmware_version}
           />
           {!!device.firmware_version && (
             <InfoRow label="Firmware" value={device.firmware_version} last />
           )}
 
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            activeOpacity={0.8}
-            onPress={() =>
-              navigation.navigate('TransferDevice', {
-                dogId: dog.id,
-                dogName: dog.name,
-                deviceId: device.id,
-                deviceUid: device.device_uid,
-              })
-            }
-          >
-            <Icon name="swap-horizontal" size={18} color={colors.ink} />
-            <Text style={styles.secondaryButtonText}>
-              Transfer to another dog
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.deviceActions}>
+            <TouchableOpacity
+              style={[styles.secondaryButton, styles.halfButton, busy && styles.disabled]}
+              activeOpacity={0.8}
+              disabled={busy}
+              onPress={() =>
+                navigation.navigate('TransferDevice', {
+                  dogId: dog.id,
+                  dogName: dog.name,
+                  deviceId: device.id,
+                  deviceUid: device.device_uid,
+                })
+              }
+            >
+              <Icon name="swap-horizontal" size={18} color={colors.ink} />
+              <Text style={styles.secondaryButtonText}>Transfer</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.secondaryButton, styles.halfButton, busy && styles.disabled]}
+              activeOpacity={0.8}
+              disabled={busy}
+              onPress={confirmRemoveDevice}
+            >
+              {removingDevice ? (
+                <ActivityIndicator size="small" color={colors.danger} />
+              ) : (
+                <>
+                  <Icon name="unlink" size={18} color={colors.danger} />
+                  <Text style={[styles.secondaryButtonText, { color: colors.danger }]}>
+                    Remove
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.hint}>
+            Transfer moves it to another of your pets. Remove frees it so you
+            or someone else can pair it later.
+          </Text>
         </>
       ) : (
         <>
@@ -253,20 +301,16 @@ export default function DogProfileScreen({ route, navigation }) {
       <TouchableOpacity
         style={styles.primaryButton}
         activeOpacity={0.85}
-        onPress={() =>
-          navigation.navigate('EditPet', {
-            dogId: dog.id,
-          })
-        }
+        onPress={() => navigation.navigate('EditPet', { dogId: dog.id })}
       >
         <Text style={styles.primaryButtonText}>Edit pet</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
-        style={[styles.dangerButton, archiving && styles.disabled]}
+        style={[styles.dangerButton, busy && styles.disabled]}
         activeOpacity={0.8}
         onPress={confirmArchive}
-        disabled={archiving}
+        disabled={busy}
       >
         <Text style={styles.dangerButtonText}>
           {archiving ? 'Archiving...' : 'Remove dog'}
@@ -277,60 +321,23 @@ export default function DogProfileScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.white,
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 40,
-  },
+  container: { flex: 1, backgroundColor: colors.white },
+  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 40 },
   center: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: colors.white,
   },
-  loadingText: {
-    marginTop: 12,
-    fontFamily: fonts.regular,
-    color: colors.muted,
-  },
+  loadingText: { marginTop: 12, fontFamily: fonts.regular, color: colors.muted },
 
   // Hero
-  hero: {
-    borderRadius: 30,
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 22,
-  },
-  heroTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  heroMeta: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-  },
-  pill: {
-    paddingHorizontal: 14,
-    height: 30,
-    borderRadius: 15,
-    justifyContent: 'center',
-  },
-  pillText: {
-    fontFamily: fonts.medium,
-    fontSize: 12,
-    letterSpacing: 0.4,
-  },
-  identity: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 14,
-    marginTop: 20,
-  },
+  hero: { borderRadius: 30, paddingHorizontal: 24, paddingTop: 20, paddingBottom: 22 },
+  heroTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  heroMeta: { fontFamily: fonts.regular, fontSize: 13 },
+  pill: { paddingHorizontal: 14, height: 30, borderRadius: 15, justifyContent: 'center' },
+  pillText: { fontFamily: fonts.medium, fontSize: 12, letterSpacing: 0.4 },
+  identity: { flexDirection: 'row', alignItems: 'center', gap: 14, marginTop: 20 },
   avatar: {
     width: 60,
     height: 60,
@@ -339,34 +346,17 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  name: {
-    flex: 1,
-    fontFamily: fonts.medium,
-    fontSize: 30,
-    lineHeight: 38,
-  },
+  name: { flex: 1, fontFamily: fonts.medium, fontSize: 30, lineHeight: 38 },
   heroDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: 'rgba(0,0,0,0.15)',
     marginTop: 20,
     marginBottom: 16,
   },
-  heroRow: {
-    flexDirection: 'row',
-  },
-  heroCol: {
-    flex: 1,
-    paddingRight: 8,
-  },
-  heroColLabel: {
-    fontFamily: fonts.regular,
-    fontSize: 12,
-    marginBottom: 2,
-  },
-  heroColValue: {
-    fontFamily: fonts.medium,
-    fontSize: 18,
-  },
+  heroRow: { flexDirection: 'row' },
+  heroCol: { flex: 1, paddingRight: 8 },
+  heroColLabel: { fontFamily: fonts.regular, fontSize: 12, marginBottom: 2 },
+  heroColValue: { fontFamily: fonts.medium, fontSize: 18 },
 
   // Device section
   sectionTitle: {
@@ -384,14 +374,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
   },
-  rowLast: {
-    borderBottomWidth: 0,
-  },
-  rowLabel: {
-    fontFamily: fonts.regular,
-    fontSize: 14,
-    color: colors.muted,
-  },
+  rowLast: { borderBottomWidth: 0 },
+  rowLabel: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted },
   rowValue: {
     flex: 1,
     marginLeft: 16,
@@ -407,6 +391,16 @@ const styles = StyleSheet.create({
     color: colors.muted,
     marginTop: 4,
   },
+  deviceActions: { flexDirection: 'row', gap: 10 },
+  halfButton: { flex: 1 },
+  hint: {
+    fontFamily: fonts.regular,
+    fontSize: 12,
+    lineHeight: 18,
+    color: colors.muted,
+    marginTop: 10,
+    paddingHorizontal: 4,
+  },
 
   // Buttons
   secondaryButton: {
@@ -419,11 +413,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.pill,
     marginTop: 14,
   },
-  secondaryButtonText: {
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    color: colors.ink,
-  },
+  secondaryButtonText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
   primaryButton: {
     height: 56,
     borderRadius: 28,
@@ -432,11 +422,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 36,
   },
-  primaryButtonText: {
-    fontFamily: fonts.medium,
-    fontSize: 16,
-    color: colors.onAccent,
-  },
+  primaryButtonText: { fontFamily: fonts.medium, fontSize: 16, color: colors.onAccent },
   dangerButton: {
     height: 52,
     borderRadius: 26,
@@ -446,12 +432,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 12,
   },
-  dangerButtonText: {
-    fontFamily: fonts.medium,
-    fontSize: 15,
-    color: colors.danger,
-  },
-  disabled: {
-    opacity: 0.5,
-  },
+  dangerButtonText: { fontFamily: fonts.medium, fontSize: 15, color: colors.danger },
+  disabled: { opacity: 0.5 },
 });

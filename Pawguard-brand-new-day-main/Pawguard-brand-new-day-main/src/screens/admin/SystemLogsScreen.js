@@ -1,13 +1,9 @@
-
-import React, {
-  useCallback,
-  useState,
-} from 'react';
+import React, { useCallback, useState } from 'react';
 
 import {
   ActivityIndicator,
+  FlatList,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -16,18 +12,61 @@ import {
 } from 'react-native';
 
 import { useFocusEffect } from '@react-navigation/native';
+
+import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
+import { colors, fonts, tones } from '../../Theme';
+
+// Action -> pastel tone + icon
+const ACTION_STYLE = {
+  INSERT: { tone: 'green', icon: 'add-circle', label: 'Created' },
+  UPDATE: { tone: 'brand', icon: 'create', label: 'Updated' },
+  DELETE: { tone: 'salmon', icon: 'trash', label: 'Deleted' },
+};
+const DEFAULT_ACTION = { tone: 'beige', icon: 'ellipse', label: 'Activity' };
+
+const FILTERS = [
+  { key: 'ALL', label: 'all' },
+  { key: 'INSERT', label: 'created' },
+  { key: 'UPDATE', label: 'updated' },
+  { key: 'DELETE', label: 'deleted' },
+];
+
+const timeAgo = (value) => {
+  const ms = new Date(value).getTime();
+  if (Number.isNaN(ms)) return 'Unknown date';
+  const sec = Math.max(0, Math.floor((Date.now() - ms) / 1000));
+  if (sec < 60) return 'Just now';
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} min ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr} hr ago`;
+  const d = Math.floor(hr / 24);
+  if (d < 7) return `${d} d ago`;
+  return new Date(ms).toLocaleDateString([], {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+};
+
+// "event_members" -> "Event members"
+const prettyTable = (name) => {
+  const text = (name || 'unknown').replace(/_/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
 
 export default function SystemLogsScreen() {
   const [logs, setLogs] = useState([]);
   const [search, setSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
   const [filter, setFilter] = useState('ALL');
+  const [expandedId, setExpandedId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadLogs = async (refresh = false) => {
-    if (refresh) setRefreshing(true);
-    else setLoading(true);
+  const loadLogs = async ({ pull = false } = {}) => {
+    if (pull) setRefreshing(true);
 
     const { data, error } = await supabase
       .from('system_logs')
@@ -40,11 +79,8 @@ export default function SystemLogsScreen() {
       .order('created_at', { ascending: false })
       .limit(100);
 
-    if (error) {
-      console.error('System logs error:', error.message);
-    } else {
-      setLogs(data || []);
-    }
+    if (error) console.error('System logs error:', error.message);
+    else setLogs(data || []);
 
     setLoading(false);
     setRefreshing(false);
@@ -56,267 +92,238 @@ export default function SystemLogsScreen() {
     }, [])
   );
 
-  const filters = ['ALL', 'INSERT', 'UPDATE', 'DELETE'];
-
+  const query = search.toLowerCase().trim();
   const filteredLogs = logs.filter((log) => {
-    const matchesFilter =
-      filter === 'ALL' || log.action === filter;
-
-    const query = search.toLowerCase().trim();
-
-    const matchesSearch = [
-      log.summary,
-      log.table_name,
-      log.action,
-      log.profiles?.name,
-    ].some((value) =>
-      value?.toLowerCase().includes(query)
-    );
-
+    const matchesFilter = filter === 'ALL' || log.action === filter;
+    const matchesSearch =
+      !query ||
+      [log.summary, log.table_name, log.action, log.profiles?.name].some((v) =>
+        v?.toLowerCase().includes(query)
+      );
     return matchesFilter && matchesSearch;
   });
 
-  const getActionColor = (action) => {
-    switch (action) {
-      case 'INSERT':
-        return '#059669';
-      case 'UPDATE':
-        return '#2563EB';
-      case 'DELETE':
-        return '#DC2626';
-      default:
-        return '#64748B';
-    }
+  const renderLog = ({ item, index }) => {
+    const a = ACTION_STYLE[item.action] || DEFAULT_ACTION;
+    const tone = tones[a.tone];
+    const open = expandedId === item.id;
+
+    return (
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={() => setExpandedId(open ? null : item.id)}
+        style={[
+          styles.row,
+          index === filteredLogs.length - 1 && styles.rowLast,
+        ]}
+      >
+        <View style={[styles.iconBox, { backgroundColor: tone.bg }]}>
+          <Icon name={a.icon} size={18} color={tone.text} />
+        </View>
+
+        <View style={styles.rowBody}>
+          <View style={styles.rowTop}>
+            <Text style={styles.table} numberOfLines={1}>
+              {prettyTable(item.table_name)}
+            </Text>
+            <View style={[styles.pill, { backgroundColor: tone.pill }]}>
+              <Text style={[styles.pillText, { color: tone.pillText }]}>
+                {a.label}
+              </Text>
+            </View>
+          </View>
+
+          <Text style={styles.summary} numberOfLines={open ? undefined : 2}>
+            {item.summary || 'No description'}
+          </Text>
+
+          <Text style={styles.meta} numberOfLines={1}>
+            {item.profiles?.name || 'System'}  ·  {timeAgo(item.created_at)}
+          </Text>
+
+          {open && (
+            <View style={styles.details}>
+              <Text style={styles.detailText}>
+                Record ID: {item.record_id || 'N/A'}
+              </Text>
+              <Text style={styles.detailText}>
+                {item.created_at
+                  ? new Date(item.created_at).toLocaleString()
+                  : 'Unknown date'}
+              </Text>
+            </View>
+          )}
+        </View>
+      </TouchableOpacity>
+    );
   };
 
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.ink} />
+      </View>
+    );
+  }
+
   return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => loadLogs(true)}
-        />
-      }
-    >
-      <Text style={styles.title}>System Logs</Text>
-
-      <Text style={styles.subtitle}>
-        Review important activities recorded in PawGuard.
-      </Text>
-
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>
-          Retrieved Activities
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>System logs</Text>
+        <Text style={styles.subtitle}>
+          Latest {logs.length} activities. Tap one for details.
         </Text>
-        <Text style={styles.summaryValue}>
-          {logs.length}
-        </Text>
-      </View>
 
-      <TextInput
-        style={styles.search}
-        placeholder="Search activity, table, or user..."
-        placeholderTextColor="#94A3B8"
-        value={search}
-        onChangeText={setSearch}
-        autoCapitalize="none"
-      />
-
-      <View style={styles.filters}>
-        {filters.map((item) => (
-          <TouchableOpacity
-            key={item}
-            style={[
-              styles.filterButton,
-              filter === item && styles.activeFilter,
-            ]}
-            onPress={() => setFilter(item)}
-          >
-            <Text
-              style={[
-                styles.filterText,
-                filter === item && styles.activeFilterText,
-              ]}
-            >
-              {item}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {loading ? (
-        <ActivityIndicator
-          size="large"
-          color="#2563EB"
-          style={{ marginTop: 30 }}
-        />
-      ) : filteredLogs.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyText}>
-            No activities found.
-          </Text>
+        <View style={[styles.search, searchFocused && styles.searchFocused]}>
+          <Icon name="search" size={18} color={colors.muted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search activity, table or user"
+            placeholderTextColor={colors.muted}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+          />
+          {!!search && (
+            <TouchableOpacity onPress={() => setSearch('')} hitSlop={10}>
+              <Icon name="close-circle" size={18} color={colors.muted} />
+            </TouchableOpacity>
+          )}
         </View>
-      ) : (
-        filteredLogs.map((log) => (
-          <View key={log.id} style={styles.logCard}>
-            <View style={styles.logHeader}>
-              <Text style={styles.tableName}>
-                {log.table_name}
-              </Text>
 
-              <View
-                style={[
-                  styles.actionBadge,
-                  {
-                    backgroundColor: getActionColor(log.action),
-                  },
-                ]}
+        <View style={styles.chips}>
+          {FILTERS.map((f) => {
+            const active = filter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setFilter(f.key)}
               >
-                <Text style={styles.actionText}>
-                  {log.action}
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                  {f.label}
                 </Text>
-              </View>
-            </View>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
 
-            <Text style={styles.description}>
-              {log.summary}
-            </Text>
-
-            <Text style={styles.detail}>
-              User: {log.profiles?.name || 'System / Unknown'}
-            </Text>
-
-            <Text style={styles.detail}>
-              Record ID: {log.record_id || 'N/A'}
-            </Text>
-
-            <Text style={styles.date}>
-              {log.created_at
-                ? new Date(log.created_at).toLocaleString()
-                : 'Unknown date'}
-            </Text>
-          </View>
-        ))
-      )}
-    </ScrollView>
+      <FlatList
+        data={filteredLogs}
+        keyExtractor={(item) => String(item.id)}
+        renderItem={renderLog}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor={colors.ink}
+            colors={[colors.ink]}
+            onRefresh={() => loadLogs({ pull: true })}
+          />
+        }
+        ListEmptyComponent={<Text style={styles.emptyText}>No activities found.</Text>}
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: colors.white },
+  center: {
     flex: 1,
-    backgroundColor: '#F5F7FB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
   },
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
-  title: {
-    fontSize: 27,
-    fontWeight: '800',
-    color: '#172033',
-  },
-  subtitle: {
-    color: '#687386',
-    marginTop: 6,
-    lineHeight: 20,
-  },
-  summaryCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    borderRadius: 15,
-    marginTop: 20,
-    marginBottom: 18,
-  },
-  summaryLabel: {
-    color: '#687386',
-    fontSize: 13,
-  },
-  summaryValue: {
-    fontSize: 30,
-    fontWeight: '800',
-    marginTop: 5,
-    color: '#172033',
-  },
+
+  header: { paddingHorizontal: 20, paddingTop: 20 },
+  title: { fontFamily: fonts.medium, fontSize: 28, color: colors.ink },
+  subtitle: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, marginTop: 4 },
+
   search: {
-    backgroundColor: '#FFFFFF',
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 15,
-    color: '#172033',
-  },
-  filters: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 18,
+    alignItems: 'center',
+    gap: 10,
+    height: 50,
+    borderRadius: 25,
+    paddingHorizontal: 16,
+    backgroundColor: colors.tile,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    marginTop: 18,
   },
-  filterButton: {
-    paddingHorizontal: 15,
-    paddingVertical: 9,
-    borderRadius: 20,
-    backgroundColor: '#E2E8F0',
+  searchFocused: { borderColor: colors.accent },
+  searchInput: {
+    flex: 1,
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.ink,
+    paddingVertical: 0,
   },
-  activeFilter: {
-    backgroundColor: '#2563EB',
+
+  chips: { flexDirection: 'row', gap: 8, marginTop: 14, marginBottom: 8 },
+  chip: {
+    height: 38,
+    paddingHorizontal: 14,
+    borderRadius: 19,
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.line,
   },
-  filterText: {
-    color: '#475569',
-    fontSize: 12,
-    fontWeight: '700',
+  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { fontFamily: fonts.regular, fontSize: 13, color: colors.ink },
+  chipTextActive: { color: colors.onAccent },
+
+  list: { paddingHorizontal: 20, paddingBottom: 40 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 14,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
-  activeFilterText: {
-    color: '#FFFFFF',
-  },
-  logCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 17,
+  rowLast: { borderBottomWidth: 0 },
+  iconBox: {
+    width: 40,
+    height: 40,
     borderRadius: 14,
-    marginBottom: 12,
-  },
-  logHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  tableName: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#172033',
+  rowBody: { flex: 1 },
+  rowTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  table: { flex: 1, fontFamily: fonts.medium, fontSize: 15, color: colors.ink },
+  pill: { paddingHorizontal: 10, height: 24, borderRadius: 12, justifyContent: 'center' },
+  pillText: { fontFamily: fonts.medium, fontSize: 11, letterSpacing: 0.3 },
+  summary: {
+    fontFamily: fonts.regular,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.ink,
+    opacity: 0.85,
+    marginTop: 4,
   },
-  actionBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 15,
-  },
-  actionText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '800',
-  },
-  description: {
-    fontSize: 13,
-    color: '#475569',
-    marginTop: 12,
-  },
-  detail: {
-    fontSize: 12,
-    color: '#687386',
-    marginTop: 7,
-  },
-  date: {
-    fontSize: 11,
-    color: '#94A3B8',
-    marginTop: 12,
-  },
-  emptyCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 22,
+  meta: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 6 },
+  details: {
+    marginTop: 10,
+    padding: 12,
     borderRadius: 14,
+    backgroundColor: colors.tile,
+    gap: 4,
   },
+  detailText: { fontFamily: fonts.regular, fontSize: 12, color: colors.tileLabel },
+
   emptyText: {
+    fontFamily: fonts.regular,
+    color: colors.muted,
     textAlign: 'center',
-    color: '#687386',
+    padding: 24,
   },
 });

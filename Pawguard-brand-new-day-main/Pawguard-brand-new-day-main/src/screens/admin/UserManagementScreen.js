@@ -1,50 +1,62 @@
-
-import React, {
-  useCallback,
-  useState,
-} from 'react';
+import React, { useCallback, useState } from 'react';
 
 import {
   ActivityIndicator,
   Alert,
+  FlatList,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 
-import {
-  useFocusEffect,
-} from '@react-navigation/native';
+import { useFocusEffect } from '@react-navigation/native';
 
+import Avatar from '../../components/Avatar';
+import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
+import { colors, fonts, tones } from '../../Theme';
+
+// Role -> pastel tone
+const ROLE_TONE = {
+  system_admin: 'salmon',
+  event_organizer: 'brand',
+  shelter_admin: 'amber',
+  shelter_staff: 'amber',
+  owner: 'green',
+};
+
+const ROLE_FILTERS = [
+  { key: 'all', label: 'all' },
+  { key: 'owner', label: 'owners' },
+  { key: 'event_organizer', label: 'organizers' },
+  { key: 'system_admin', label: 'admins' },
+];
+
+// 'event_organizer' -> 'Event organizer'
+const formatRole = (role) => {
+  const text = (role || 'unknown').replace(/_/g, ' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+};
 
 export default function UserManagementScreen() {
   const [users, setUsers] = useState([]);
   const [search, setSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [roleFilter, setRoleFilter] = useState('all');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  const loadUsers = async (refresh = false) => {
-    if (refresh) {
-      setRefreshing(true);
-    } else {
-      setLoading(true);
-    }
+  const loadUsers = async ({ pull = false } = {}) => {
+    if (pull) setRefreshing(true);
 
-    const { data, error } = await supabase.rpc(
-      'admin_list_users'
-    );
+    const { data, error } = await supabase.rpc('admin_list_users');
 
     if (error) {
       console.error('User management error:', error);
-
-      Alert.alert(
-        'Unable to Load Users',
-        error.message
-      );
+      Alert.alert('Unable to load users', error.message);
     } else {
       setUsers(data || []);
     }
@@ -59,278 +71,238 @@ export default function UserManagementScreen() {
     }, [])
   );
 
-  const filteredUsers = users.filter((user) => {
-    const query = search.toLowerCase().trim();
-
-    return (
-      user.name?.toLowerCase().includes(query) ||
-      user.email?.toLowerCase().includes(query) ||
-      user.role?.toLowerCase().includes(query)
-    );
+  const query = search.toLowerCase().trim();
+  const filteredUsers = users.filter((u) => {
+    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
+    const matchesSearch =
+      !query ||
+      u.name?.toLowerCase().includes(query) ||
+      u.email?.toLowerCase().includes(query) ||
+      u.role?.toLowerCase().includes(query);
+    return matchesRole && matchesSearch;
   });
 
-  const getRoleColor = (role) => {
-    switch (role) {
-      case 'system_admin':
-        return '#DC2626';
+  const countRole = (role) => users.filter((u) => u.role === role).length;
 
-      case 'event_organizer':
-        return '#2563EB';
+  const renderUser = ({ item, index }) => {
+    const tone = tones[ROLE_TONE[item.role]] || tones.beige;
 
-      case 'shelter_admin':
-      case 'shelter_staff':
-        return '#7C3AED';
-
-      default:
-        return '#059669';
-    }
-  };
-
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={styles.content}
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => loadUsers(true)}
+    return (
+      <View style={[styles.row, index === filteredUsers.length - 1 && styles.rowLast]}>
+        <Avatar
+          uri={item.avatar_url}
+          name={item.name}
+          size={46}
+          bg={tone.bg}
+          color={tone.text}
         />
-      }
-    >
-      <Text style={styles.title}>
-        User Management
-      </Text>
 
-      <Text style={styles.subtitle}>
-        View registered PawGuard accounts and their assigned roles.
-      </Text>
-
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryLabel}>
-          Total Registered Users
-        </Text>
-
-        <Text style={styles.summaryValue}>
-          {users.length}
-        </Text>
-      </View>
-
-      <TextInput
-        style={styles.searchInput}
-        placeholder="Search name, email, or role..."
-        placeholderTextColor="#94A3B8"
-        value={search}
-        onChangeText={setSearch}
-        autoCapitalize="none"
-      />
-
-      {loading ? (
-        <ActivityIndicator
-          size="large"
-          color="#2563EB"
-          style={styles.loader}
-        />
-      ) : filteredUsers.length === 0 ? (
-        <View style={styles.emptyCard}>
-          <Text style={styles.emptyText}>
-            No matching accounts found.
+        <View style={styles.rowBody}>
+          <Text style={styles.name} numberOfLines={1}>
+            {item.name || 'Unnamed user'}
+          </Text>
+          <Text style={styles.email} numberOfLines={1}>
+            {item.email || 'No email available'}
+          </Text>
+          <Text style={styles.date}>
+            Joined{' '}
+            {item.created_at
+              ? new Date(item.created_at).toLocaleDateString([], {
+                  day: 'numeric',
+                  month: 'short',
+                  year: 'numeric',
+                })
+              : 'unknown'}
           </Text>
         </View>
-      ) : (
-        filteredUsers.map((user) => (
-          <View
-            key={user.id}
-            style={styles.userCard}
-          >
-            <View style={styles.userHeader}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>
-                  {user.name?.charAt(0)?.toUpperCase() || '?'}
-                </Text>
-              </View>
 
-              <View style={styles.userInfo}>
-                <Text style={styles.userName}>
-                  {user.name}
-                </Text>
+        <View style={[styles.pill, { backgroundColor: tone.pill }]}>
+          <Text style={[styles.pillText, { color: tone.pillText }]} numberOfLines={1}>
+            {formatRole(item.role)}
+          </Text>
+        </View>
+      </View>
+    );
+  };
 
-                <Text style={styles.userEmail}>
-                  {user.email || 'No email available'}
-                </Text>
-              </View>
-            </View>
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color={colors.ink} />
+      </View>
+    );
+  }
 
-            <View style={styles.roleContainer}>
-              <Text style={styles.detailLabel}>
-                Assigned Role
-              </Text>
+  return (
+    <View style={styles.container}>
+      <View style={styles.header}>
+        <Text style={styles.title}>Users</Text>
+        <Text style={styles.subtitle}>Registered accounts and their roles.</Text>
 
-              <View
-                style={[
-                  styles.roleBadge,
-                  {
-                    backgroundColor: getRoleColor(user.role),
-                  },
-                ]}
-              >
-                <Text style={styles.roleText}>
-                  {user.role?.replace(/_/g, ' ')}
-                </Text>
-              </View>
-            </View>
-
-            <Text style={styles.dateText}>
-              Registered: {
-                user.created_at
-                  ? new Date(user.created_at).toLocaleDateString()
-                  : 'Unknown'
-              }
-            </Text>
+        <View style={styles.statsRow}>
+          <View style={styles.statCol}>
+            <Text style={styles.statNumber}>{users.length}</Text>
+            <Text style={styles.statLabel}>Total</Text>
           </View>
-        ))
-      )}
-    </ScrollView>
+          <View style={[styles.statCol, styles.statDivider]}>
+            <Text style={styles.statNumber}>{countRole('owner')}</Text>
+            <Text style={styles.statLabel}>Owners</Text>
+          </View>
+          <View style={[styles.statCol, styles.statDivider]}>
+            <Text style={styles.statNumber}>{countRole('event_organizer')}</Text>
+            <Text style={styles.statLabel}>Organizers</Text>
+          </View>
+          <View style={[styles.statCol, styles.statDivider]}>
+            <Text style={styles.statNumber}>{countRole('system_admin')}</Text>
+            <Text style={styles.statLabel}>Admins</Text>
+          </View>
+        </View>
+
+        <View style={[styles.search, searchFocused && styles.searchFocused]}>
+          <Icon name="search" size={18} color={colors.muted} />
+          <TextInput
+            style={styles.searchInput}
+            placeholder="Search name, email or role"
+            placeholderTextColor={colors.muted}
+            value={search}
+            onChangeText={setSearch}
+            autoCapitalize="none"
+            onFocus={() => setSearchFocused(true)}
+            onBlur={() => setSearchFocused(false)}
+          />
+          {!!search && (
+            <TouchableOpacity onPress={() => setSearch('')} hitSlop={10}>
+              <Icon name="close-circle" size={18} color={colors.muted} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        <View style={styles.chips}>
+          {ROLE_FILTERS.map((f) => {
+            const active = roleFilter === f.key;
+            return (
+              <TouchableOpacity
+                key={f.key}
+                style={[styles.chip, active && styles.chipActive]}
+                onPress={() => setRoleFilter(f.key)}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                  {f.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      <FlatList
+        data={filteredUsers}
+        keyExtractor={(item) => item.id}
+        renderItem={renderUser}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            tintColor={colors.ink}
+            colors={[colors.ink]}
+            onRefresh={() => loadUsers({ pull: true })}
+          />
+        }
+        ListEmptyComponent={
+          <Text style={styles.emptyText}>No matching accounts found.</Text>
+        }
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { flex: 1, backgroundColor: colors.white },
+  center: {
     flex: 1,
-    backgroundColor: '#F5F7FB',
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.white,
   },
 
-  content: {
-    padding: 20,
-    paddingBottom: 40,
-  },
+  header: { paddingHorizontal: 20, paddingTop: 20 },
+  title: { fontFamily: fonts.medium, fontSize: 28, color: colors.ink },
+  subtitle: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, marginTop: 4 },
 
-  title: {
-    fontSize: 27,
-    fontWeight: '800',
-    color: '#172033',
+  statsRow: { flexDirection: 'row', marginTop: 22 },
+  statCol: { flex: 1 },
+  statDivider: {
+    paddingLeft: 12,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.line,
   },
+  statNumber: { fontFamily: fonts.medium, fontSize: 26, color: colors.ink },
+  statLabel: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
 
-  subtitle: {
-    color: '#687386',
-    marginTop: 6,
-    lineHeight: 20,
-  },
-
-  summaryCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 20,
-    borderRadius: 15,
-    marginTop: 22,
-    marginBottom: 18,
-  },
-
-  summaryLabel: {
-    color: '#687386',
-    fontSize: 13,
-  },
-
-  summaryValue: {
-    fontSize: 32,
-    fontWeight: '800',
-    color: '#172033',
-    marginTop: 5,
-  },
-
-  searchInput: {
-    backgroundColor: '#FFFFFF',
-    padding: 15,
-    borderRadius: 12,
-    marginBottom: 18,
-    fontSize: 14,
-    color: '#172033',
-  },
-
-  loader: {
-    marginTop: 30,
-  },
-
-  userCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 17,
-    borderRadius: 15,
-    marginBottom: 12,
-  },
-
-  userHeader: {
+  search: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    height: 50,
+    borderRadius: 25,
+    paddingHorizontal: 16,
+    backgroundColor: colors.tile,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    marginTop: 22,
   },
-
-  avatar: {
-    width: 45,
-    height: 45,
-    borderRadius: 23,
-    backgroundColor: '#DBEAFE',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  avatarText: {
-    fontSize: 19,
-    fontWeight: '800',
-    color: '#1D4ED8',
-  },
-
-  userInfo: {
+  searchFocused: { borderColor: colors.accent },
+  searchInput: {
     flex: 1,
-    marginLeft: 12,
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.ink,
+    paddingVertical: 0,
   },
 
-  userName: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#172033',
+  chips: { flexDirection: 'row', gap: 8, marginTop: 14, marginBottom: 8 },
+  chip: {
+    height: 38,
+    paddingHorizontal: 14,
+    borderRadius: 19,
+    justifyContent: 'center',
+    backgroundColor: colors.white,
+    borderWidth: 2,
+    borderColor: colors.line,
   },
+  chipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  chipText: { fontFamily: fonts.regular, fontSize: 13, color: colors.ink },
+  chipTextActive: { color: colors.onAccent },
 
-  userEmail: {
-    fontSize: 12,
-    color: '#687386',
-    marginTop: 4,
+  list: { paddingHorizontal: 20, paddingBottom: 40 },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
-
-  roleContainer: {
-    marginTop: 17,
+  rowLast: { borderBottomWidth: 0 },
+  rowBody: { flex: 1 },
+  name: { fontFamily: fonts.medium, fontSize: 15, color: colors.ink },
+  email: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 1 },
+  date: { fontFamily: fonts.regular, fontSize: 11, color: colors.muted, marginTop: 3 },
+  pill: {
+    paddingHorizontal: 10,
+    height: 26,
+    borderRadius: 13,
+    justifyContent: 'center',
+    maxWidth: 120,
   },
-
-  detailLabel: {
-    color: '#687386',
-    fontSize: 12,
-    marginBottom: 7,
-  },
-
-  roleBadge: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 20,
-  },
-
-  roleText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 11,
-    textTransform: 'capitalize',
-  },
-
-  dateText: {
-    color: '#94A3B8',
-    fontSize: 11,
-    marginTop: 14,
-  },
-
-  emptyCard: {
-    backgroundColor: '#FFFFFF',
-    padding: 22,
-    borderRadius: 14,
-  },
+  pillText: { fontFamily: fonts.medium, fontSize: 11, letterSpacing: 0.3 },
 
   emptyText: {
+    fontFamily: fonts.regular,
+    color: colors.muted,
     textAlign: 'center',
-    color: '#687386',
+    padding: 24,
   },
 });

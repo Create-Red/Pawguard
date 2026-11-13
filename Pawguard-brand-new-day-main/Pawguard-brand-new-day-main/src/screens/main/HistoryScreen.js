@@ -302,26 +302,13 @@ export default function HistoryScreen() {
         return;
       }
 
-      const { data: device, error: deviceError } = await supabase
-        .from('devices')
-        .select('id')
-        .eq('dog_id', dogId)
-        .maybeSingle();
-
-      if (deviceError) throw deviceError;
-      if (isStale()) return;
-
-      if (!device) {
-        setRecords([]);
-        return;
-      }
-
+      // Readings belong to the DOG, not the device. This keeps a pet's
+      // history even after its device is removed, transferred or lent,
+      // and never shows another dog's readings.
       let query = supabase
         .from('sensor_data')
-        .select(
-          'id, surface_temp, ambient_temp, humidity, timestamp_utc'
-        )
-        .eq('device_id', device.id)
+        .select('id, surface_temp, ambient_temp, humidity, timestamp_utc')
+        .eq('dog_id', dogId)
         .order('timestamp_utc', { ascending: false });
 
       if (selectedDate) {
@@ -441,9 +428,8 @@ export default function HistoryScreen() {
         <Text style={styles.subtitle}>
           {dogName ? (
             <>
-              Readings from{' '}
-              <Text style={styles.subtitleName}>{dogName}</Text>
-              {"'s device."}
+              Readings recorded for{' '}
+              <Text style={styles.subtitleName}>{dogName}</Text>.
             </>
           ) : (
             "Temperature and humidity readings from your dog's device."
