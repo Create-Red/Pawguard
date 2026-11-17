@@ -19,16 +19,30 @@ import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
+import {
+  DEFAULT_THRESHOLDS,
+  RISK_TIERS,
+  setAlertThresholds,
+} from '../../utils/healthRisk';
 
-const DEFAULTS = {
-  moderate_surface_temp: '39',
-  high_surface_temp: '40',
-  low_surface_temp_moderate: '36',
-  low_surface_temp_high: '35',
-  moderate_humidity: '70',
-  high_humidity: '80',
-  low_humidity_moderate: '45',
-  low_humidity_high: '35',
+const KEYS = Object.keys(DEFAULT_THRESHOLDS.normal);
+
+const TIER_INFO = {
+  normal: {
+    label: 'Normal',
+    tone: 'green',
+    examples: 'Aspin, mixed breeds, Labrador',
+  },
+  elevated: {
+    label: 'Elevated',
+    tone: 'amber',
+    examples: 'Golden Retriever, Great Dane, Husky',
+  },
+  high: {
+    label: 'High',
+    tone: 'salmon',
+    examples: 'Pug, Shih Tzu, Bulldog, Chow Chow',
+  },
 };
 
 // Each section: "too high" pair and "too low" pair
@@ -79,35 +93,72 @@ const SECTIONS = [
   },
 ];
 
+// { normal: { key: '39', ... }, elevated: {...}, high: {...} } as strings
+const toStrings = (source) => {
+  const out = {};
+  for (const tier of RISK_TIERS) {
+    out[tier] = {};
+    for (const key of KEYS) out[tier][key] = String(source[tier][key]);
+  }
+  return out;
+};
+
+const tierChanged = (a, b, tier) => KEYS.some((k) => a[tier][k] !== b[tier][k]);
+
+// Returns an error message, or '' if this level's values are fine
+const checkTier = (n) => {
+  if (
+    n.high_surface_temp <= n.moderate_surface_temp ||
+    n.low_surface_temp_moderate <= n.low_surface_temp_high ||
+    n.high_humidity <= n.moderate_humidity ||
+    n.low_humidity_moderate <= n.low_humidity_high
+  ) {
+    return 'High must be stricter than moderate: higher for "too hot / humid", lower for "too cold / dry".';
+  }
+  if (
+    n.low_surface_temp_moderate >= n.moderate_surface_temp ||
+    n.low_humidity_moderate >= n.moderate_humidity
+  ) {
+    return 'The "too low" values must be below the "too high" values.';
+  }
+  if (Object.values(n).some((v) => v < 0 || v > 100)) {
+    return 'All values must be between 0 and 100.';
+  }
+  return '';
+};
+
 export default function AlertConfigurationScreen() {
   const { profile } = useAuth();
 
-  const [settings, setSettings] = useState(DEFAULTS);
-  const [saved, setSaved] = useState(DEFAULTS); // last loaded values
+  const [tier, setTier] = useState('normal');
+  const [settings, setSettings] = useState(() => toStrings(DEFAULT_THRESHOLDS));
+  const [saved, setSaved] = useState(() => toStrings(DEFAULT_THRESHOLDS));
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [focused, setFocused] = useState(null);
   const [error, setError] = useState('');
 
-  const dirty = Object.keys(DEFAULTS).some((k) => settings[k] !== saved[k]);
+  const changedTiers = RISK_TIERS.filter((t) => tierChanged(settings, saved, t));
+  const dirty = changedTiers.length > 0;
 
   const loadSettings = async () => {
     const { data, error: loadError } = await supabase
       .from('alert_thresholds')
-      .select('*')
-      .eq('id', 1)
-      .single();
+      .select('*');
 
     if (loadError) {
       console.error('Threshold loading error:', loadError);
       setError(loadError.message);
     } else {
-      const values = {};
-      Object.keys(DEFAULTS).forEach((key) => {
-        values[key] = String(data[key]);
-      });
+      const source = { ...DEFAULT_THRESHOLDS };
+      for (const t of RISK_TIERS) {
+        const row = (data || []).find((r) => (r.risk_tier || 'normal') === t);
+        if (row) source[t] = row;
+      }
+      const values = toStrings(source);
       setSettings(values);
       setSaved(values);
+      setAlertThresholds(data); // this device uses the new limits right away
       setError('');
     }
 
@@ -121,67 +172,76 @@ export default function AlertConfigurationScreen() {
   );
 
   const updateSetting = (key, value) => {
-    setSettings((prev) => ({ ...prev, [key]: value }));
+    setSettings((prev) => ({ ...prev, [tier]: { ...prev[tier], [key]: value } }));
     if (error) setError('');
   };
 
   const saveSettings = async () => {
-    const n = {};
-
-    for (const key of Object.keys(DEFAULTS)) {
-      const value = settings[key].trim();
-      if (value === '' || !Number.isFinite(Number(value))) {
-        setError('Please enter a valid number for every threshold.');
+    // 1) Every value is a number, and each level makes sense by itself
+    const numbers = {};
+    for (const t of RISK_TIERS) {
+      numbers[t] = {};
+      for (const key of KEYS) {
+        const value = settings[t][key].trim();
+        if (value === '' || !Number.isFinite(Number(value))) {
+          setTier(t);
+          setError(`${TIER_INFO[t].label}: please enter a valid number for every threshold.`);
+          return;
+        }
+        numbers[t][key] = Number(value);
+      }
+      const msg = checkTier(numbers[t]);
+      if (msg) {
+        setTier(t);
+        setError(`${TIER_INFO[t].label}: ${msg}`);
         return;
       }
-      n[key] = Number(value);
     }
 
-    if (
-      n.high_surface_temp <= n.moderate_surface_temp ||
-      n.low_surface_temp_moderate <= n.low_surface_temp_high ||
-      n.high_humidity <= n.moderate_humidity ||
-      n.low_humidity_moderate <= n.low_humidity_high
-    ) {
-      setError(
-        'High must be stricter than moderate: higher for "too hot / humid", lower for "too cold / dry".'
-      );
-      return;
+    // 2) A riskier breed must never be warned LATER than a safer one
+    const order = ['normal', 'elevated', 'high'];
+    for (let i = 1; i < order.length; i++) {
+      const safer = numbers[order[i - 1]];
+      const riskier = numbers[order[i]];
+      if (
+        riskier.moderate_surface_temp > safer.moderate_surface_temp ||
+        riskier.high_surface_temp > safer.high_surface_temp ||
+        riskier.moderate_humidity > safer.moderate_humidity ||
+        riskier.high_humidity > safer.high_humidity
+      ) {
+        setTier(order[i]);
+        setError(
+          `${TIER_INFO[order[i]].label} dogs must be warned at the same or a lower "too hot / humid" value than ${TIER_INFO[order[i - 1]].label} dogs.`
+        );
+        return;
+      }
     }
 
-    if (
-      n.low_surface_temp_moderate >= n.moderate_surface_temp ||
-      n.low_humidity_moderate >= n.moderate_humidity
-    ) {
-      setError('The "too low" values must be below the "too high" values.');
-      return;
-    }
-
-    if (Object.values(n).some((v) => v < 0 || v > 100)) {
-      setError('All values must be between 0 and 100.');
-      return;
-    }
-
+    // 3) Save only the levels that changed
     setSaving(true);
     setError('');
 
-    const { error: saveError } = await supabase
-      .from('alert_thresholds')
-      .update({
-        ...n,
-        updated_by: profile?.id,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', 1);
+    for (const t of changedTiers) {
+      const { error: saveError } = await supabase
+        .from('alert_thresholds')
+        .update({
+          ...numbers[t],
+          updated_by: profile?.id,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('risk_tier', t);
 
-    setSaving(false);
-
-    if (saveError) {
-      console.error('Threshold save error:', saveError);
-      setError(saveError.message);
-      return;
+      if (saveError) {
+        setSaving(false);
+        console.error('Threshold save error:', saveError);
+        setTier(t);
+        setError(saveError.message);
+        loadSettings();
+        return;
+      }
     }
 
+    setSaving(false);
     Alert.alert('Settings saved', 'Alert thresholds have been updated.');
     loadSettings();
   };
@@ -193,6 +253,9 @@ export default function AlertConfigurationScreen() {
       </View>
     );
   }
+
+  const info = TIER_INFO[tier];
+  const infoTone = tones[info.tone];
 
   return (
     <KeyboardAvoidingView
@@ -206,14 +269,40 @@ export default function AlertConfigurationScreen() {
       >
         <Text style={styles.title}>Alert thresholds</Text>
         <Text style={styles.subtitle}>
-          Used by every owner and organizer screen to decide Low, Moderate and
-          High risk.
+          Each breed has a heat-risk level. Dogs use the limits of their level to
+          decide Low, Moderate and High risk.
         </Text>
 
-        <View style={[styles.notice, { backgroundColor: tones.amber.bg }]}>
-          <Icon name="information-circle" size={18} color={tones.amber.text} />
-          <Text style={[styles.noticeText, { color: tones.amber.text }]}>
-            These are system alert settings, not veterinary diagnostic limits.
+        {/* Level switch */}
+        <View style={styles.segment}>
+          {RISK_TIERS.map((t) => {
+            const active = t === tier;
+            const changed = changedTiers.includes(t);
+            return (
+              <TouchableOpacity
+                key={t}
+                style={[styles.segmentItem, active && styles.segmentActive]}
+                onPress={() => {
+                  setTier(t);
+                  setFocused(null);
+                }}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: active }}
+              >
+                <Text style={[styles.segmentText, active && styles.segmentTextActive]}>
+                  {TIER_INFO[t].label}
+                </Text>
+                {changed && <View style={styles.changedDot} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        <View style={[styles.notice, { backgroundColor: infoTone.bg }]}>
+          <Icon name="paw" size={18} color={infoTone.text} />
+          <Text style={[styles.noticeText, { color: infoTone.text }]}>
+            <Text style={styles.noticeStrong}>{info.label} risk breeds</Text>
+            {`, e.g. ${info.examples}. Dogs with no breed picked use Normal.`}
           </Text>
         </View>
 
@@ -235,10 +324,7 @@ export default function AlertConfigurationScreen() {
                     return (
                       <View
                         key={f.key}
-                        style={[
-                          styles.field,
-                          isFocused && styles.fieldFocused,
-                        ]}
+                        style={[styles.field, isFocused && styles.fieldFocused]}
                       >
                         <View style={styles.fieldTop}>
                           <View style={[styles.levelPill, { backgroundColor: tone.pill }]}>
@@ -250,7 +336,7 @@ export default function AlertConfigurationScreen() {
                         <View style={styles.inputRow}>
                           <TextInput
                             style={styles.input}
-                            value={settings[f.key]}
+                            value={settings[tier][f.key]}
                             onChangeText={(v) => updateSetting(f.key, v)}
                             keyboardType="decimal-pad"
                             placeholder="--"
@@ -271,6 +357,15 @@ export default function AlertConfigurationScreen() {
           </View>
         ))}
 
+        <View style={[styles.notice, styles.noticeBottom, { backgroundColor: tones.beige.bg }]}>
+          <Icon name="information-circle" size={18} color={tones.beige.text} />
+          <Text style={[styles.noticeText, { color: tones.beige.text }]}>
+            System alert settings, not veterinary limits. Which breeds are at higher
+            risk is based on Hall, Carter & O'Neill (2020). How much earlier each level
+            warns was set by the team and should be checked with a vet.
+          </Text>
+        </View>
+
         {!!error && <Text style={styles.errorText}>{error}</Text>}
 
         <TouchableOpacity
@@ -282,7 +377,9 @@ export default function AlertConfigurationScreen() {
             <ActivityIndicator color={colors.onAccent} />
           ) : (
             <Text style={styles.primaryButtonText}>
-              {dirty ? 'Save changes' : 'No changes'}
+              {dirty
+                ? `Save changes (${changedTiers.map((t) => TIER_INFO[t].label).join(', ')})`
+                : 'No changes'}
             </Text>
           )}
         </TouchableOpacity>
@@ -322,15 +419,43 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
 
+  segment: {
+    flexDirection: 'row',
+    backgroundColor: colors.tile,
+    borderRadius: 25,
+    padding: 4,
+    marginTop: 20,
+  },
+  segmentItem: {
+    flex: 1,
+    height: 42,
+    borderRadius: 21,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+  },
+  segmentActive: { backgroundColor: colors.ink },
+  segmentText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
+  segmentTextActive: { color: colors.white },
+  changedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: tones.amber.pillText,
+  },
+
   notice: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     borderRadius: 20,
     padding: 14,
-    marginTop: 18,
+    marginTop: 14,
   },
+  noticeBottom: { marginTop: 28 },
   noticeText: { flex: 1, fontFamily: fonts.regular, fontSize: 13, lineHeight: 19 },
+  noticeStrong: { fontFamily: fonts.semibold },
 
   sectionTitle: {
     fontFamily: fonts.semibold,
@@ -399,6 +524,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 28,
+    paddingHorizontal: 16,
   },
   primaryButtonText: { fontFamily: fonts.medium, fontSize: 16, color: colors.onAccent },
   dimmed: { opacity: 0.5 },

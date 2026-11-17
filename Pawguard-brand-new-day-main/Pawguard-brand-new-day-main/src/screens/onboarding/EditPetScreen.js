@@ -16,6 +16,7 @@ import {
 
 import * as ImagePicker from 'expo-image-picker';
 
+import BreedPicker from '../../components/BreedPicker';
 import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -41,8 +42,10 @@ export default function EditPetScreen({ route, navigation }) {
 
   const [original, setOriginal] = useState(null); // values as loaded
   const [name, setName] = useState('');
-  const [breed, setBreed] = useState('');
+  const [breedId, setBreedId] = useState(null);
+  const [breed, setBreed] = useState(''); // breed name (old free text until a breed is picked)
   const [age, setAge] = useState('');
+  const [weight, setWeight] = useState('');
   const [photoUrl, setPhotoUrl] = useState(null);     // current saved photo
   const [newPhoto, setNewPhoto] = useState(null);     // picked, not yet uploaded
 
@@ -68,14 +71,21 @@ export default function EditPetScreen({ route, navigation }) {
 
       const values = {
         name: data.name || '',
+        breedId: data.breed_id || null,
         breed: data.breed || '',
         age: data.age !== null && data.age !== undefined ? String(data.age) : '',
+        weight:
+          data.weight_kg !== null && data.weight_kg !== undefined
+            ? String(Number(data.weight_kg))
+            : '',
       };
 
       setOriginal(values);
       setName(values.name);
+      setBreedId(values.breedId);
       setBreed(values.breed);
       setAge(values.age);
+      setWeight(values.weight);
       setPhotoUrl(data.photo_url || null);
     } catch (e) {
       console.log('LOAD DOG ERROR:', e);
@@ -96,8 +106,9 @@ export default function EditPetScreen({ route, navigation }) {
   const dirty =
     !!original &&
     (name !== original.name ||
-      breed !== original.breed ||
+      breedId !== original.breedId ||
       age !== original.age ||
+      weight !== original.weight ||
       !!newPhoto);
 
   async function pickImage() {
@@ -172,6 +183,13 @@ export default function EditPetScreen({ route, navigation }) {
       return;
     }
 
+    const weightNum = weight.trim() ? Number(weight.replace(',', '.')) : null;
+    if (weightNum !== null && (!Number.isFinite(weightNum) || weightNum <= 0 || weightNum > 120)) {
+      setError('Please enter a weight between 0.1 and 120 kg.');
+      setErrorField('weight');
+      return;
+    }
+
     setSaving(true);
     clearError();
 
@@ -179,7 +197,9 @@ export default function EditPetScreen({ route, navigation }) {
       const update = {
         name: name.trim(),
         breed: breed.trim() || null,
+        breed_id: breedId,
         age: age.trim() ? Number(age) : null,
+        weight_kg: weightNum,
       };
 
       if (newPhoto) {
@@ -292,26 +312,21 @@ export default function EditPetScreen({ route, navigation }) {
             onBlur={() => setFocused(null)}
           />
 
-          <View style={styles.row}>
-            <View style={styles.rowWide}>
-              <Field
-                label="Breed"
-                placeholder="e.g. Aspin"
-                value={breed}
-                onChangeText={(t) => {
-                  setBreed(t);
-                  clearError();
-                }}
-                autoCapitalize="words"
-                returnKeyType="next"
-                editable={!saving}
-                focused={focused === 'breed'}
-                onFocus={() => setFocused('breed')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
+          <View>
+            <BreedPicker
+              valueId={breedId}
+              legacyName={breedId ? null : breed}
+              onChange={(b) => {
+                setBreedId(b.id);
+                setBreed(b.name);
+                clearError();
+              }}
+              disabled={saving}
+            />
+          </View>
 
-            <View style={styles.rowNarrow}>
+          <View style={styles.row}>
+            <View style={styles.rowHalf}>
               <Field
                 label="Age (yrs)"
                 placeholder="0"
@@ -322,8 +337,7 @@ export default function EditPetScreen({ route, navigation }) {
                 }}
                 keyboardType="number-pad"
                 maxLength={2}
-                returnKeyType="done"
-                onSubmitEditing={updateDog}
+                returnKeyType="next"
                 editable={!saving}
                 focused={focused === 'age'}
                 error={errorField === 'age'}
@@ -331,9 +345,33 @@ export default function EditPetScreen({ route, navigation }) {
                 onBlur={() => setFocused(null)}
               />
             </View>
+
+            <View style={styles.rowHalf}>
+              <Field
+                label="Weight (kg)"
+                placeholder="0.0"
+                value={weight}
+                onChangeText={(t) => {
+                  setWeight(t.replace(/[^0-9.,]/g, ''));
+                  clearError();
+                }}
+                keyboardType="decimal-pad"
+                maxLength={5}
+                returnKeyType="done"
+                onSubmitEditing={updateDog}
+                editable={!saving}
+                focused={focused === 'weight'}
+                error={errorField === 'weight'}
+                onFocus={() => setFocused('weight')}
+                onBlur={() => setFocused(null)}
+              />
+            </View>
           </View>
 
-          <Text style={styles.hint}>Breed and age are optional.</Text>
+          <Text style={styles.hint}>
+            Breed, age and weight are optional, but they help PawGuard warn you earlier
+            for dogs that overheat more easily.
+          </Text>
 
           {!!error && <Text style={styles.errorText}>{error}</Text>}
         </View>
@@ -432,8 +470,7 @@ const styles = StyleSheet.create({
   // Form
   form: { marginTop: 24, gap: 12 },
   row: { flexDirection: 'row', gap: 10 },
-  rowWide: { flex: 2 },
-  rowNarrow: { flex: 1 },
+  rowHalf: { flex: 1 },
   field: {
     backgroundColor: colors.tile,
     borderRadius: 20,

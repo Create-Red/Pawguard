@@ -123,7 +123,6 @@ export default function DashboardScreen({ navigation }) {
   const [now, setNow] = useState(Date.now());
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const lastAlertRisk = useRef(null);
   const offlineNotified = useRef(false);
   const selectedDogRef = useRef(null); // id of the pet currently on screen
   const dogRequest = useRef(0);        // ignores slow, outdated responses
@@ -159,7 +158,11 @@ export default function DashboardScreen({ navigation }) {
   }
 
   useEffect(() => {
-    if (profile?.id) registerForPushNotifications(profile.id);
+    if (profile?.id) {
+      registerForPushNotifications(profile.id).then((t) =>
+        console.log('PUSH TOKEN:', t)
+      );
+    }
   }, [profile?.id]);
 
   useEffect(() => {
@@ -315,6 +318,10 @@ export default function DashboardScreen({ navigation }) {
           if (selectedDogRef.current !== dogId) return;
           setSensor(payload.new);
           setNow(Date.now());
+          // The server may have just made an alert for this reading
+          if (payload.new?.risk_level === 'HIGH' || payload.new?.risk_level === 'MODERATE') {
+            setTimeout(fetchUnreadCount, 1500);
+          }
         }
       )
       .subscribe((s) => console.log('Realtime status:', s));
@@ -359,45 +366,11 @@ export default function DashboardScreen({ navigation }) {
   }, [selectedDog?.id]);
 
   // ---- Health alerts -------------------------------------------------
-  const createHealthAlert = async (dog, reading, level) => {
-    if (!dog || !reading) return;
-    if (level !== 'HIGH' && level !== 'MODERATE') return;
-    if (lastAlertRisk.current === level) return;
-
-    lastAlertRisk.current = level;
-
-    const { error } = await supabase.from('health_alerts').insert({
-      dog_id: dog.id,
-      type: level === 'HIGH' ? 'HIGH_RISK' : 'MODERATE_RISK',
-      reading_value: {
-        surface_temp: reading.surface_temp,
-        ambient_temp: reading.ambient_temp,
-        humidity: reading.humidity,
-      },
-    });
-
-    if (error) {
-      console.log('HEALTH ALERT ERROR:', error.message);
-      lastAlertRisk.current = null;
-      return;
-    }
-
-    setTimeout(fetchUnreadCount, 800);
-  };
+  // Alerts are now created by Supabase itself for every reading
+  // (supabase_server_risk_check.sql), even when this app is closed.
+  // The app only shows the risk and refreshes the bell badge.
 
   useEffect(() => {
-    if (!selectedDog || !sensor) return;
-
-    if (riskLevel === 'LOW' || riskLevel === 'UNKNOWN') {
-      lastAlertRisk.current = null;
-      return;
-    }
-
-    createHealthAlert(selectedDog, sensor, riskLevel);
-  }, [selectedDog?.id, sensor?.id, riskLevel]);
-
-  useEffect(() => {
-    lastAlertRisk.current = null;
     offlineNotified.current = false;
   }, [selectedDog?.id]);
 

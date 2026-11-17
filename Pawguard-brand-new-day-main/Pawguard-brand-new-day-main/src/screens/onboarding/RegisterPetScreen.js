@@ -16,6 +16,7 @@ import {
 
 import * as ImagePicker from 'expo-image-picker';
 
+import BreedPicker from '../../components/BreedPicker';
 import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -48,13 +49,14 @@ export default function RegisterPetScreen({ navigation }) {
   const { user } = useAuth();
 
   const [name, setName] = useState('');
-  const [breed, setBreed] = useState('');
+  const [breed, setBreed] = useState(null); // picked breed { id, name, risk_tier }
   const [age, setAge] = useState('');
+  const [weight, setWeight] = useState('');
   const [selectedImage, setSelectedImage] = useState(null);
   const [focused, setFocused] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [errorField, setErrorField] = useState(null); // 'name' | 'age' | null
+  const [errorField, setErrorField] = useState(null); // 'name' | 'age' | 'weight' | null
 
   const showError = (message, field = null) => {
     setError(message);
@@ -116,6 +118,12 @@ export default function RegisterPetScreen({ navigation }) {
       return;
     }
 
+    const weightNum = weight.trim() ? Number(weight.replace(',', '.')) : null;
+    if (weightNum !== null && (!Number.isFinite(weightNum) || weightNum <= 0 || weightNum > 120)) {
+      showError('Please enter a weight between 0.1 and 120 kg.', 'weight');
+      return;
+    }
+
     clearError();
     setLoading(true);
 
@@ -164,8 +172,10 @@ export default function RegisterPetScreen({ navigation }) {
         .insert({
           owner_id: user.id,
           name: name.trim(),
-          breed: breed.trim() || null,
+          breed: breed?.name || null,
+          breed_id: breed?.id || null,
           age: age.trim() ? Number(age) : null,
+          weight_kg: weightNum,
           photo_url: photoURL,
         })
         .select()
@@ -275,23 +285,19 @@ export default function RegisterPetScreen({ navigation }) {
             onBlur={() => setFocused(null)}
           />
 
-          <View style={styles.row}>
-            <View style={styles.rowWide}>
-              <Field
-                label="Breed"
-                placeholder="e.g. Aspin"
-                value={breed}
-                onChangeText={setBreed}
-                autoCapitalize="words"
-                returnKeyType="next"
-                editable={!loading}
-                focused={focused === 'breed'}
-                onFocus={() => setFocused('breed')}
-                onBlur={() => setFocused(null)}
-              />
-            </View>
+          <View>
+            <BreedPicker
+              valueId={breed?.id}
+              onChange={(b) => {
+                setBreed(b);
+                clearError();
+              }}
+              disabled={loading}
+            />
+          </View>
 
-            <View style={styles.rowNarrow}>
+          <View style={styles.row}>
+            <View style={styles.rowHalf}>
               <Field
                 label="Age (yrs)"
                 placeholder="0"
@@ -302,8 +308,7 @@ export default function RegisterPetScreen({ navigation }) {
                 }}
                 keyboardType="number-pad"
                 maxLength={2}
-                returnKeyType="done"
-                onSubmitEditing={registerPet}
+                returnKeyType="next"
                 editable={!loading}
                 focused={focused === 'age'}
                 error={errorField === 'age'}
@@ -311,9 +316,33 @@ export default function RegisterPetScreen({ navigation }) {
                 onBlur={() => setFocused(null)}
               />
             </View>
+
+            <View style={styles.rowHalf}>
+              <Field
+                label="Weight (kg)"
+                placeholder="0.0"
+                value={weight}
+                onChangeText={(t) => {
+                  setWeight(t.replace(/[^0-9.,]/g, ''));
+                  clearError();
+                }}
+                keyboardType="decimal-pad"
+                maxLength={5}
+                returnKeyType="done"
+                onSubmitEditing={registerPet}
+                editable={!loading}
+                focused={focused === 'weight'}
+                error={errorField === 'weight'}
+                onFocus={() => setFocused('weight')}
+                onBlur={() => setFocused(null)}
+              />
+            </View>
           </View>
 
-          <Text style={styles.hint}>Breed and age are optional.</Text>
+          <Text style={styles.hint}>
+            Breed, age and weight are optional, but they help PawGuard warn you earlier
+            for dogs that overheat more easily.
+          </Text>
 
           {!!error && <Text style={styles.errorText}>{error}</Text>}
         </View>
@@ -440,10 +469,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
-  rowWide: {
-    flex: 2,
-  },
-  rowNarrow: {
+  rowHalf: {
     flex: 1,
   },
   field: {
