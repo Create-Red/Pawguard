@@ -36,6 +36,13 @@ const MODULES = [
     text: 'Battery, status and last contact',
   },
   {
+    route: 'RegisterDevices',
+    icon: 'add-circle',
+    tone: 'brand',
+    title: 'Register devices',
+    text: 'New collars and claim codes',
+  },
+  {
     route: 'AlertConfiguration',
     icon: 'options',
     tone: 'amber',

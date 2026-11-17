@@ -83,21 +83,44 @@ export default function DogProfileScreen({ route, navigation }) {
   // ---- Remove device -------------------------------------------------
   function confirmRemoveDevice() {
     Alert.alert(
-      'Remove device?',
-      `${device.device_uid} will be unpaired from ${dog.name}. ` +
-        `${dog.name} will stop receiving readings and location.\n\n` +
-        'You or anyone you lend it to can pair it again with its Device ID.',
+      'Remove device',
+      `What do you want to do with ${device.device_uid}?\n\n` +
+        `• Keep it: it stays in your account, ready for another pet.\n` +
+        `• Release it: for lending, selling or giving it away. ` +
+        `The new user claims it with the code on the box card.\n\n` +
+        `${dog.name}'s past readings are kept either way.`,
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Remove', style: 'destructive', onPress: removeDevice },
+        { text: 'Keep it', onPress: () => removeDevice('unpair_device') },
+        {
+          text: 'Release it',
+          style: 'destructive',
+          onPress: confirmRelease,
+        },
       ]
     );
   }
 
-  async function removeDevice() {
+  function confirmRelease() {
+    Alert.alert(
+      'Release device?',
+      `${device.device_uid} will leave your account. To use it again, you or ` +
+        'anyone else will need its claim code from the box card.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Release',
+          style: 'destructive',
+          onPress: () => removeDevice('release_device'),
+        },
+      ]
+    );
+  }
+
+  async function removeDevice(fn) {
     setRemovingDevice(true);
 
-    const { error } = await supabase.rpc('unpair_device', {
+    const { error } = await supabase.rpc(fn, {
       p_device_id: device.id,
     });
 
@@ -271,8 +294,8 @@ export default function DogProfileScreen({ route, navigation }) {
           </View>
 
           <Text style={styles.hint}>
-            Transfer moves it to another of your pets. Remove frees it so you
-            or someone else can pair it later.
+            Transfer moves it to another of your pets. Remove lets you keep it
+            for later, or release it to someone else.
           </Text>
         </>
       ) : (

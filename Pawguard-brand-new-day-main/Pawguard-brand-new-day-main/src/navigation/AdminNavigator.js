@@ -10,6 +10,7 @@ import UserManagementScreen from '../screens/admin/UserManagementScreen';
 import SystemLogsScreen from '../screens/admin/SystemLogsScreen';
 import AlertConfigurationScreen from '../screens/admin/AlertConfigurationScreen';
 import DeviceMonitoringScreen from '../screens/admin/DeviceMonitoring';
+import RegisterDevicesScreen from '../screens/admin/RegisterDevicesScreen';
 
 const Stack = createNativeStackNavigator();
 
@@ -58,6 +59,14 @@ export default function AdminNavigator() {
           title: 'Device Monitoring',
         }}
       />
+      <Stack.Screen
+        name="RegisterDevices"
+        component={RegisterDevicesScreen}
+        options={{
+          title: 'Register Devices',
+        }}
+      />
     </Stack.Navigator>
+    
   );
 }
