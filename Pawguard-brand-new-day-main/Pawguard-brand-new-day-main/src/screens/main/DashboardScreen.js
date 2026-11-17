@@ -29,7 +29,6 @@ import { getSelectedDogId, setSelectedDogId } from '../../utils/selectedDog';
 const OFFLINE_AFTER_MS = 2 * 60 * 1000;
 const UNREAD_REFRESH_MS = 15 * 1000;
 const EVENTS_REFRESH_MS = 30 * 1000; // fallback in case realtime is off
-const OFFLINE_NOTIFY_COOLDOWN_MS = 60 * 60 * 1000;
 
 const toMillis = (ts) => {
   if (!ts) return null;
@@ -123,7 +122,6 @@ export default function DashboardScreen({ navigation }) {
   const [now, setNow] = useState(Date.now());
   const [unreadCount, setUnreadCount] = useState(0);
 
-  const offlineNotified = useRef(false);
   const selectedDogRef = useRef(null); // id of the pet currently on screen
   const dogRequest = useRef(0);        // ignores slow, outdated responses
 
@@ -158,11 +156,7 @@ export default function DashboardScreen({ navigation }) {
   }
 
   useEffect(() => {
-    if (profile?.id) {
-      registerForPushNotifications(profile.id).then((t) =>
-        console.log('PUSH TOKEN:', t)
-      );
-    }
+    if (profile?.id) registerForPushNotifications(profile.id);
   }, [profile?.id]);
 
   useEffect(() => {
@@ -370,58 +364,9 @@ export default function DashboardScreen({ navigation }) {
   // (supabase_server_risk_check.sql), even when this app is closed.
   // The app only shows the risk and refreshes the bell badge.
 
-  useEffect(() => {
-    offlineNotified.current = false;
-  }, [selectedDog?.id]);
-
   // ---- Device offline notification -----------------------------------
-  const createOfflineNotification = async (dog) => {
-    if (!profile?.id) return;
-
-    const since = new Date(
-      Date.now() - OFFLINE_NOTIFY_COOLDOWN_MS
-    ).toISOString();
-
-    const { data: existing } = await supabase
-      .from('notifications')
-      .select('id')
-      .eq('user_id', profile.id)
-      .eq('dog_id', dog.id)
-      .eq('type', 'DEVICE_OFFLINE')
-      .gte('created_at', since)
-      .limit(1);
-
-    if (existing && existing.length > 0) return;
-
-    const { error } = await supabase.from('notifications').insert({
-      user_id: profile.id,
-      dog_id: dog.id,
-      type: 'DEVICE_OFFLINE',
-      message: `${dog.name}'s device has stopped sending data. Check that it is on and charged.`,
-      is_read: false,
-    });
-
-    if (error) {
-      console.log('OFFLINE NOTIFICATION ERROR:', error.message);
-      offlineNotified.current = false;
-      return;
-    }
-
-    fetchUnreadCount();
-  };
-
-  useEffect(() => {
-    if (status === 'Online') {
-      offlineNotified.current = false;
-      return;
-    }
-
-    if (status !== 'Offline' || lastSeen === null) return;
-    if (!selectedDog || offlineNotified.current) return;
-
-    offlineNotified.current = true;
-    createOfflineNotification(selectedDog);
-  }, [status, lastSeen, selectedDog?.id]);
+  // Also done by Supabase now (supabase_offline_check.sql): a check every
+  // minute notifies the owner when a collar stops sending data.
 
   // Silent refresh whenever the tab is focused (no spinner, nothing cleared)
   useFocusEffect(

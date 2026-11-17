@@ -6,6 +6,7 @@ import React, {
 } from 'react';
 
 import { supabase } from '../config/supabase';
+import { unregisterPushNotifications } from '../utils/registerForPush';
 
 const AuthContext = createContext(null);
 
@@ -26,10 +27,7 @@ export function AuthProvider({ children }) {
         } = await supabase.auth.getSession();
 
         if (error) {
-          console.log(
-            'GET SESSION ERROR:',
-            error.message
-          );
+          console.log('GET SESSION ERROR:', error.message);
         }
 
         if (!mounted) return;
@@ -43,10 +41,7 @@ export function AuthProvider({ children }) {
           setProfile(null);
         }
       } catch (error) {
-        console.log(
-          'LOAD SESSION ERROR:',
-          error
-        );
+        console.log('LOAD SESSION ERROR:', error);
 
         if (mounted) {
           setSession(null);
@@ -64,24 +59,20 @@ export function AuthProvider({ children }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
-        if (!mounted) return;
+    } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+      if (!mounted) return;
 
-        setSession(newSession);
-        setUser(newSession?.user ?? null);
+      setSession(newSession);
+      setUser(newSession?.user ?? null);
 
-        if (newSession?.user) {
-          await loadProfile(
-            newSession.user.id
-          );
-        } else {
-          setProfile(null);
-        }
-
-        setLoading(false);
+      if (newSession?.user) {
+        await loadProfile(newSession.user.id);
+      } else {
+        setProfile(null);
       }
-    );
+
+      setLoading(false);
+    });
 
     return () => {
       mounted = false;
@@ -96,45 +87,34 @@ export function AuthProvider({ children }) {
     }
 
     try {
-      const {
-        data,
-        error,
-      } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
 
       if (error) {
-        console.log(
-          'PROFILE ERROR:',
-          error.message
-        );
-
+        console.log('PROFILE ERROR:', error.message);
         setProfile(null);
         return;
       }
 
       setProfile(data ?? null);
     } catch (error) {
-      console.log(
-        'LOAD PROFILE ERROR:',
-        error
-      );
-
+      console.log('LOAD PROFILE ERROR:', error);
       setProfile(null);
     }
   }
 
   async function signOut() {
-    const { error } =
-      await supabase.auth.signOut();
+    // While still logged in: stop this account's alerts going to this phone.
+    // If it fails (e.g. no internet), logout still continues.
+    await unregisterPushNotifications();
+
+    const { error } = await supabase.auth.signOut();
 
     if (error) {
-      console.log(
-        'SIGN OUT ERROR:',
-        error.message
-      );
+      console.log('SIGN OUT ERROR:', error.message);
     }
   }
 

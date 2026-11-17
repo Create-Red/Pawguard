@@ -17,7 +17,9 @@ Notifications.setNotificationHandler({
 
 /**
  * Asks for permission, gets this phone's Expo push token,
- * and saves it to profiles.expo_push_token.
+ * and saves it to the logged-in user's profile.
+ * The same token is removed from any other account, so a shared phone
+ * only gets alerts for whoever is logged in now.
  * Returns the token, or null if it could not be set up.
  */
 export async function registerForPushNotifications(userId) {
@@ -70,10 +72,10 @@ export async function registerForPushNotifications(userId) {
       projectId,
     });
 
-    const { error } = await supabase
-      .from('profiles')
-      .update({ expo_push_token: token })
-      .eq('id', userId);
+    // Saves on MY profile and removes it from any other account
+    const { error } = await supabase.rpc('set_my_push_token', {
+      p_token: token,
+    });
 
     if (error) {
       console.log('Saving push token failed:', error.message);
@@ -84,5 +86,18 @@ export async function registerForPushNotifications(userId) {
   } catch (error) {
     console.warn('Push notification registration failed:', error);
     return null;
+  }
+}
+
+/**
+ * Call BEFORE signing out (the user must still be logged in).
+ * Stops this account's alerts from going to this phone.
+ */
+export async function unregisterPushNotifications() {
+  try {
+    const { error } = await supabase.rpc('clear_my_push_token');
+    if (error) console.log('Clearing push token failed:', error.message);
+  } catch (error) {
+    console.log('Clearing push token failed:', error);
   }
 }
