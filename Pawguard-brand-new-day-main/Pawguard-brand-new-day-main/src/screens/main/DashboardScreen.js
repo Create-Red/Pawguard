@@ -20,6 +20,7 @@ import { useFocusEffect } from '@react-navigation/native';
 
 import CallVetButton from '../../components/CallVetButton';
 import Icon from '../../components/Icon';
+import Mascot, { MascotLoader } from '../../components/Mascot';
 import WalkSafetyCard from '../../components/WalkSafetyCard';
 import {
   calculateHealthRisk,
@@ -397,9 +398,7 @@ export default function DashboardScreen({ navigation }) {
   // ---- First load: one calm spinner instead of a half-empty screen -----
   if (initialLoading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.ink} />
-      </View>
+      <MascotLoader text="Loading your pets" />
     );
   }
 
@@ -407,9 +406,7 @@ export default function DashboardScreen({ navigation }) {
   if (dogs.length === 0) {
     return (
       <View style={styles.empty}>
-        <View style={[styles.emptyIcon, { backgroundColor: tones.brand.bg }]}>
-          <Icon name="paw" size={40} color={tones.brand.text} />
-        </View>
+        <Mascot animation="wave" size={200} />
         <Text style={styles.emptyTitle}>No pet registered</Text>
         <Text style={styles.emptyText}>
           Register your pet to start using PawGuard.

@@ -12,7 +12,7 @@ import {
   View,
 } from 'react-native';
 
-import Icon from '../../components/Icon';
+import Mascot from '../../components/Mascot';
 import { supabase } from '../../config/supabase';
 import { colors, fonts, tones } from '../../Theme';
 
@@ -86,15 +86,17 @@ export default function LoginScreen({ navigation }) {
 
         {/* Pastel hero card */}
         <View style={[styles.hero, { backgroundColor: tones.brand.bg }]}>
-          <View style={styles.heroIcon}>
-            <Icon name="paw" size={30} color={tones.brand.text} />
+          <View style={styles.heroCopy}>
+            <Text style={[styles.heroTitle, { color: tones.brand.text }]}>
+              Welcome back
+            </Text>
+            <Text style={[styles.heroText, { color: tones.brand.pillText }]}>
+              Sign in to check on your pet's health and location.
+            </Text>
           </View>
-          <Text style={[styles.heroTitle, { color: tones.brand.text }]}>
-            Welcome back
-          </Text>
-          <Text style={[styles.heroText, { color: tones.brand.pillText }]}>
-            Sign in to check on your pet's health and location.
-          </Text>
+
+          {/* The PawGuard dog, peeking over the card */}
+          <Mascot animation="wave" size={196} style={styles.heroMascot} />
         </View>
 
         {/* Form */}
@@ -215,22 +217,23 @@ const styles = StyleSheet.create({
   hero: {
     borderRadius: 30,
     paddingHorizontal: 22,
-    paddingTop: 22,
-    paddingBottom: 24,
-    marginTop: 32,
-  },
-  heroIcon: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: 'rgba(255,255,255,0.6)',
+    paddingTop: 26,
+    paddingBottom: 26,
+    marginTop: 60, // room for the dog's head above the card
+    minHeight: 150,
     justifyContent: 'center',
-    alignItems: 'center',
+  },
+  heroCopy: {
+    paddingRight: 130, // keep text clear of the dog
+  },
+  heroMascot: {
+    position: 'absolute',
+    right: -14,
+    bottom: 6, // taller than the card, so its head peeks over the top
   },
   heroTitle: {
     fontFamily: fonts.medium,
     fontSize: 28,
-    marginTop: 18,
   },
   heroText: {
     fontFamily: fonts.regular,

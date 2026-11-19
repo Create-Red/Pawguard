@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import Icon from '../../components/Icon';
+import Mascot, { MascotLoader } from '../../components/Mascot';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
@@ -342,9 +343,7 @@ export default function ManageEventsScreen({ navigation }) {
 
   if (initialLoading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.ink} />
-      </View>
+      <MascotLoader text="Loading events" />
     );
   }
 
@@ -381,9 +380,7 @@ export default function ManageEventsScreen({ navigation }) {
         }
         ListEmptyComponent={
           <View style={styles.empty}>
-            <View style={styles.emptyIcon}>
-              <Icon name="paw" size={40} color={tones.brand.text} />
-            </View>
+            <Mascot animation="wave" size={180} />
             <Text style={styles.emptyTitle}>No events yet</Text>
             <Text style={styles.emptyText}>
               Create your first event to start accepting dog registrations.

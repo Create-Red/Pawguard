@@ -7,7 +7,7 @@
 import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import Icon from './Icon';
+import Mascot from './Mascot';
 import { fonts, tones } from '../Theme';
 import {
   fetchWeather,
@@ -18,7 +18,12 @@ import {
 } from '../utils/walkSafety';
 
 const LEVEL_TONE = { SAFE: 'green', CAUTION: 'amber', AVOID: 'salmon' };
-const LEVEL_ICON = { SAFE: 'walk', CAUTION: 'sunny', AVOID: 'thermometer' };
+// The dog shows the answer too: ready to run, water + shade, or too hot by the fan
+const LEVEL_DOG = {
+  SAFE: { pose: 'run', animation: 'bounce' },
+  CAUTION: { pose: 'takeCare', animation: 'breathe' },
+  AVOID: { pose: 'notNow', animation: 'droop' },
+};
 
 const isNum = (v) => v != null && v !== '' && Number.isFinite(Number(v));
 
@@ -88,8 +93,12 @@ export default function WalkSafetyCard({ tier = 'normal', sensor, collarOnline, 
             {line}
           </Text>
         </View>
-        <View style={styles.iconWrap}>
-          <Icon name={LEVEL_ICON[advice.level]} size={26} color={tone.text} />
+        <View style={styles.dogWrap}>
+          <Mascot
+            pose={LEVEL_DOG[advice.level].pose}
+            animation={LEVEL_DOG[advice.level].animation}
+            size={84}
+          />
         </View>
       </View>
     </View>
@@ -108,6 +117,7 @@ const styles = StyleSheet.create({
   meta: { fontFamily: fonts.regular, fontSize: 13 },
   title: { fontFamily: fonts.medium, fontSize: 22, marginTop: 2 },
   line: { fontFamily: fonts.regular, fontSize: 13, marginTop: 4 },
+  dogWrap: { marginVertical: -10, marginRight: -6 },
   iconWrap: {
     width: 50,
     height: 50,

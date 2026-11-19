@@ -27,7 +27,42 @@ const TYPE_STYLE = {
   // Organizer alerts (dogs in an event that is running)
   EVENT_HIGH_RISK: { tone: 'salmon', icon: 'warning', label: 'Event · High risk' },
   EVENT_DEVICE_OFFLINE: { tone: 'beige', icon: 'cloud-offline', label: 'Event · Collar offline' },
+  // Events (owners)
+  EVENT_APPROVED: { tone: 'green', icon: 'checkmark-circle', label: 'Event · Approved' },
+  EVENT_REJECTED: { tone: 'beige', icon: 'close-circle', label: 'Event · Declined' },
+  EVENT_STARTED: { tone: 'green', icon: 'flag', label: 'Event · Started' },
+  EVENT_ENDED: { tone: 'brand', icon: 'checkmark-done', label: 'Event · Ended' },
+  EVENT_CANCELLED: { tone: 'salmon', icon: 'close-circle', label: 'Event · Cancelled' },
+  // Events (organizers)
+  EVENT_JOIN_REQUEST: { tone: 'amber', icon: 'person-add', label: 'Event · Join request' },
+  EVENT_REPORT_READY: { tone: 'brand', icon: 'document-text', label: 'Event · Report ready' },
 };
+
+// Where tapping a notification goes (screen names in the navigators)
+function targetFor(item) {
+  switch (item.type) {
+    case 'EVENT_JOIN_REQUEST':
+      return item.event_id ? ['EventMembers', { eventId: item.event_id }] : null;
+    case 'EVENT_REPORT_READY':
+      return item.event_id ? ['EventReport', { eventId: item.event_id }] : null;
+    case 'EVENT_HIGH_RISK':
+    case 'EVENT_DEVICE_OFFLINE':
+      return item.event_id ? ['EventMonitoring', { eventId: item.event_id }] : null;
+    case 'EVENT_APPROVED':
+    case 'EVENT_REJECTED':
+    case 'EVENT_STARTED':
+    case 'EVENT_CANCELLED':
+      return ['Events'];
+    case 'EVENT_ENDED':
+      return ['History'];
+    case 'HIGH_RISK':
+    case 'MODERATE_RISK':
+    case 'DEVICE_OFFLINE':
+      return ['Dashboard'];
+    default:
+      return null;
+  }
+}
 const DEFAULT_STYLE = { tone: 'brand', icon: 'notifications', label: 'PawGuard' };
 
 const styleFor = (type) => {
@@ -54,7 +89,7 @@ const timeAgo = (value) => {
   });
 };
 
-export default function NotificationsScreen() {
+export default function NotificationsScreen({ navigation }) {
   const { profile } = useAuth();
 
   const [notifications, setNotifications] = useState([]);
@@ -246,7 +281,17 @@ export default function NotificationsScreen() {
                 styles.card,
                 { backgroundColor: unread ? s.colors.bg : colors.tile },
               ]}
-              onPress={() => unread && markAsRead(item.id)}
+              onPress={() => {
+                if (unread) markAsRead(item.id);
+                const target = targetFor(item);
+                if (target && navigation) {
+                  try {
+                    navigation.navigate(...target);
+                  } catch (e) {
+                    console.log('NOTIFICATION NAV ERROR:', e.message);
+                  }
+                }
+              }}
               accessibilityRole="button"
               accessibilityLabel={`${unread ? 'Unread. ' : ''}${
                 item.message || 'PawGuard notification'

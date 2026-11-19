@@ -18,8 +18,8 @@ import {
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 
-import Avatar from '../../components/Avatar';
 import Icon from '../../components/Icon';
+import Mascot, { MascotLoader } from '../../components/Mascot';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
@@ -71,6 +71,39 @@ const greeting = () => {
   if (h < 18) return 'Good afternoon';
   return 'Good evening';
 };
+
+// Heat-safety tips the dog shares when there's nothing more urgent
+const TIPS = [
+  'Set up shaded rest spots and water bowls before the dogs arrive.',
+  'Morning and late afternoon are the coolest times for dog events.',
+  'Hot pavement burns paws. Try the 5-second hand test on the ground.',
+  'Flat-faced breeds like Pugs overheat faster. Watch them closely.',
+  'Plan short breaks every 15 to 20 minutes on hot days.',
+];
+
+// What the dog says, most urgent first
+function dogLine({ live, liveSummaries, pending, nextEvent, now }) {
+  const high = liveSummaries.reduce((n, s) => n + (s?.high || 0), 0);
+  const offline = liveSummaries.reduce((n, s) => n + (s?.offline || 0), 0);
+  if (live.length && high > 0) {
+    return `${high} dog${high === 1 ? ' is' : 's are'} getting too hot. Tap "Monitor dogs" and check on ${high === 1 ? 'it' : 'them'} now!`;
+  }
+  if (live.length && offline > 0) {
+    return `${offline} collar${offline === 1 ? ' is' : 's are'} offline. Ask the owner${offline === 1 ? '' : 's'} to check the collar.`;
+  }
+  if (live.length) return 'All dogs look good! Keep the water bowls full.';
+  if (pending > 0) {
+    return `${pending} owner${pending === 1 ? ' is' : 's are'} waiting for your approval. Tap "Needs your review".`;
+  }
+  if (nextEvent) {
+    const hours = (toMillis(nextEvent.starts_at) - now) / 3600000;
+    if (hours > 0 && hours < 24) {
+      return `${nextEvent.name} starts soon! Remind owners to bring water and charge their collars.`;
+    }
+  }
+  if (!nextEvent) return "No events yet. Let's plan one together!";
+  return TIPS[Math.floor(now / 86400000) % TIPS.length]; // a new tip each day
+}
 
 // Dog health summary for one live event
 async function loadLiveSummary(eventId) {
@@ -201,9 +234,7 @@ export default function EventOrganizerDashboardScreen({ navigation }) {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.ink} />
-      </View>
+      <MascotLoader text="Loading your events" />
     );
   }
 
@@ -232,13 +263,17 @@ export default function EventOrganizerDashboardScreen({ navigation }) {
           <Text style={styles.brandText}>PawGuard</Text>
           <View style={styles.brandDot} />
         </View>
-        <Avatar uri={profile?.avatar_url} name={profile?.name} size={40} />
       </View>
 
-      <Text style={styles.greeting}>{greeting()}{firstName ? `, ${firstName}` : ''}</Text>
-      <Text style={styles.title}>
-        {hasLive ? 'Your event is live' : 'Here’s your day'}
-      </Text>
+      {/* Greeting with the PawGuard dog standing by */}
+      <View style={styles.greetRow}>
+        <View style={styles.greetText}>
+          <Text style={styles.greeting}>{greeting()}{firstName ? `, ${firstName}` : ''}</Text>
+          <Text style={styles.title}>
+            {hasLive ? 'Your event is live' : 'Here’s your day'}
+          </Text>
+        </View>
+      </View>
 
       {/* 1. Live now */}
       {hasLive ? (
@@ -425,11 +460,52 @@ export default function EventOrganizerDashboardScreen({ navigation }) {
         <Icon name="add" size={20} color={colors.onAccent} />
         <Text style={styles.primaryButtonText}>Create event</Text>
       </TouchableOpacity>
+
+      {/* The PawGuard dog with a tip or a heads-up */}
+      <View style={styles.dogRow}>
+        <Mascot pose="stand" animation="breathe" size={110} />
+        <View style={styles.bubbleWrap}>
+          <View style={styles.bubbleTail} />
+          <View style={styles.bubble}>
+            <Text style={styles.bubbleText}>
+              {dogLine({
+                live: liveEvents,
+                liveSummaries: liveEvents.map((e) => live[e.id]),
+                pending: totalPending,
+                nextEvent: upcoming[0],
+                now,
+              })}
+            </Text>
+          </View>
+        </View>
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  greetRow: { flexDirection: 'row', alignItems: 'flex-end', marginTop: 10 },
+  greetText: { flex: 1, paddingBottom: 4 },
+  dogRow: { flexDirection: 'row', alignItems: 'center', marginTop: 22 },
+  bubbleWrap: { flex: 1, flexDirection: 'row', alignItems: 'center', marginLeft: -16 }, // the dog picture has empty space around it
+  bubbleTail: {
+    width: 0,
+    height: 0,
+    borderTopWidth: 9,
+    borderBottomWidth: 9,
+    borderRightWidth: 12,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderRightColor: colors.tile,
+  },
+  bubble: {
+    flex: 1,
+    backgroundColor: colors.tile,
+    borderRadius: 18,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+  },
+  bubbleText: { fontFamily: fonts.medium, fontSize: 14, lineHeight: 20, color: colors.ink },
   container: { flex: 1, backgroundColor: colors.white },
   content: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 120 },
   center: {
@@ -444,6 +520,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: 40, // same height as when the profile picture was here
     marginTop: 8,
   },
   brand: { flexDirection: 'row', alignItems: 'flex-end' },

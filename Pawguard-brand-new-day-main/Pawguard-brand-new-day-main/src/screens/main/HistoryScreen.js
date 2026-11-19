@@ -19,6 +19,7 @@ import DateTimePicker from '@react-native-community/datetimepicker';
 
 import HistoryChart from '../../components/HistoryChart';
 import Icon from '../../components/Icon';
+import Mascot, { MascotLoader } from '../../components/Mascot';
 import TempBars from '../../components/TempBars';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -296,9 +297,7 @@ export default function HistoryScreen() {
 
   if (!hasLoaded) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.ink} />
-      </View>
+      <MascotLoader text="Loading history" />
     );
   }
 
@@ -385,8 +384,11 @@ export default function HistoryScreen() {
 
         {!!errorMessage && (
           <View style={styles.errorCard}>
-            <Text style={styles.errorTitle}>Unable to load history</Text>
-            <Text style={styles.errorText}>{errorMessage}</Text>
+            <Mascot pose="sad" size={96} animation="droop" style={styles.errorMascot} />
+            <View style={styles.errorBody}>
+              <Text style={styles.errorTitle}>Unable to load history</Text>
+              <Text style={styles.errorText}>{errorMessage}</Text>
+            </View>
           </View>
         )}
 
@@ -396,6 +398,7 @@ export default function HistoryScreen() {
               <ActivityIndicator color={colors.ink} />
             ) : (
               <>
+                <Mascot pose="sleep" size={150} animation="breathe" />
                 <Text style={styles.emptyTitle}>No readings</Text>
                 <Text style={styles.emptyText}>
                   The collar didn't send anything in this time. Try another range.
@@ -794,7 +797,17 @@ const styles = StyleSheet.create({
   expandText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
 
   // States
-  errorCard: { backgroundColor: tones.salmon.bg, borderRadius: 20, padding: 16, marginTop: 12 },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: tones.salmon.bg,
+    borderRadius: 20,
+    padding: 12,
+    marginTop: 12,
+  },
+  errorMascot: { marginVertical: -6 },
+  errorBody: { flex: 1 },
   errorTitle: { fontFamily: fonts.semibold, fontSize: 15, color: tones.salmon.text },
   errorText: { fontFamily: fonts.regular, fontSize: 13, color: tones.salmon.text, marginTop: 4 },
   empty: { alignItems: 'center', paddingVertical: 40 },
