@@ -1,9 +1,4 @@
-import React, {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   ActivityIndicator,
@@ -19,391 +14,290 @@ import {
 } from 'react-native';
 
 import { useFocusEffect } from '@react-navigation/native';
-import { LineChart } from 'react-native-chart-kit';
-import Icon from '../../components/Icon';
 // npx expo install @react-native-community/datetimepicker
 import DateTimePicker from '@react-native-community/datetimepicker';
 
+import HistoryChart from '../../components/HistoryChart';
+import Icon from '../../components/Icon';
+import TempBars from '../../components/TempBars';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { getAlertThresholds, getDogTier, loadAlertThresholds } from '../../utils/healthRisk';
 import { useSelectedDogId } from '../../utils/selectedDog';
 import { colors, fonts, tones } from '../../Theme';
 
-const SCREEN_WIDTH = Dimensions.get('window').width;
-const CHART_WIDTH = SCREEN_WIDTH - 32;
+const CHART_WIDTH = Dimensions.get('window').width - 40;
+const COLLAPSED_ROWS = 5;
+const RECORD_LIMIT = 50;
 
-const LATEST_LIMIT = 30;   // records loaded when no date is picked
-const DAY_LIMIT = 500;     // max records loaded for one picked day
-const COLLAPSED_ROWS = 5;  // rows shown before "Show all"
-const EXPANDED_ROWS = 50;  // max rows shown after "Show all"
-const DAY_CHART_POINTS = 12;
-
-// One entry per button in the Trends switcher
-const METRICS = [
-  {
-    key: 'surface',
-    label: 'Surface',
-    title: 'Surface temperature',
-    description: "At the sensor's contact surface",
-    field: 'surface_temp',
-    unit: '°C',
-    color: tones.salmon.sub,
-  },
-  {
-    key: 'ambient',
-    label: 'Ambient',
-    title: 'Ambient temperature',
-    description: 'Of the surroundings',
-    field: 'ambient_temp',
-    unit: '°C',
-    color: tones.amber.sub,
-  },
-  {
-    key: 'humidity',
-    label: 'Humidity',
-    title: 'Humidity',
-    description: 'Relative humidity of the surroundings',
-    field: 'humidity',
-    unit: '%',
-    color: tones.green.pillText,
-  },
+const RANGES = [
+  { key: 'today', label: 'Today' },
+  { key: 'week', label: 'This week' },
+  { key: 'event', label: 'Event' },
 ];
 
-// "#c8dcbc" -> "200, 220, 188"
-function hexToRgb(hex) {
-  const n = parseInt(hex.replace('#', ''), 16);
-  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
-}
+const METRICS = [
+  { key: 'surface', label: 'Surface', title: 'Surface temperature', unit: '°C', color: '#b5523b' },
+  { key: 'ambient', label: 'Ambient', title: 'Air temperature', unit: '°C', color: '#8a6a1f' },
+  { key: 'humidity', label: 'Humidity', title: 'Humidity', unit: '%', color: '#3f6f8f' },
+];
 
-function formatReading(value, unit, decimals = 1) {
-  const number = Number(value);
+// ---- Helpers --------------------------------------------------------------
 
-  if (value == null || value === '' || !Number.isFinite(number)) {
-    return '--';
-  }
-
-  return `${number.toFixed(decimals)}${unit}`;
-}
-
-// Supabase "timestamp without time zone" values come back without a "Z".
-// They are stored in UTC, so add it (same fix as the dashboard).
-function parseDate(value) {
+const toDate = (value) => {
   if (!value) return null;
   const hasZone = /(Z|[+-]\d{2}:?\d{2})$/.test(value);
-  const date = new Date(hasZone ? value : `${value}Z`);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
+  const d = new Date(hasZone ? value : `${value}Z`);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
 
-// "Oct 23, 10:00 PM"
-function formatShort(value) {
-  const date = parseDate(value);
-  if (!date) return 'Date unavailable';
-
-  return date.toLocaleString([], {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
-}
-
-function startOfDay(date) {
+const startOfDay = (date) => {
   const d = new Date(date);
   d.setHours(0, 0, 0, 0);
   return d;
-}
+};
 
-function formatDay(date) {
-  return date.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  });
-}
+const formatDay = (date) =>
+  date.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
 
-// Pick n evenly spaced items so a full day still fits on the chart
-function downsample(items, n) {
-  if (items.length <= n) return items;
-  const step = (items.length - 1) / (n - 1);
-  return Array.from({ length: n }, (_, i) => items[Math.round(i * step)]);
-}
+const formatTime = (date, withDay) =>
+  date
+    ? date.toLocaleString([], {
+        ...(withDay ? { month: 'short', day: 'numeric' } : {}),
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : '--';
 
-function SensorChart({ metric, records, wholeDay }) {
-  const { title, description, field, unit, color } = metric;
-  const decimals = 1;
+const num = (v, d = 1) => {
+  const n = Number(v);
+  return v == null || v === '' || !Number.isFinite(n) ? '--' : n.toFixed(d);
+};
 
-  // records are newest-first; the chart wants oldest-first
-  const valid = [...records]
-    .reverse()
-    .map((item) => ({
-      value: Number(item[field]),
-      timestamp: item.timestamp_utc,
-    }))
-    .filter(
-      (item) =>
-        item.timestamp &&
-        item[field] !== '' &&
-        Number.isFinite(item.value)
-    );
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
-  const points = wholeDay
-    ? downsample(valid, DAY_CHART_POINTS)
-    : valid.slice(-10);
+// Which time window to show, and how many chart points to ask for
+function getWindow(range, selectedDate, event) {
+  const now = new Date();
 
-  // Keep the horizontal axis uncluttered: first, middle, last
-  const labels = points.map((point, index) => {
-    if (
-      index === 0 ||
-      index === points.length - 1 ||
-      index === Math.floor(points.length / 2)
-    ) {
-      const date = parseDate(point.timestamp);
-      return date
-        ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-        : '';
+  if (range === 'week') {
+    const from = startOfDay(new Date(now.getTime() - 6 * 86400000));
+    return { from, to: now, buckets: 168, kind: 'week' };
+  }
+
+  if (range === 'event' && event) {
+    const from = toDate(event.starts_at);
+    const end = toDate(event.ends_at);
+    const to = end && end < now ? end : now;
+    if (from && to > from) {
+      const minutes = (to - from) / 60000;
+      return { from, to, buckets: clamp(Math.round(minutes / 2), 24, 180), kind: 'event' };
     }
-    return '';
-  });
+  }
 
-  const values = points.map((point) => point.value);
-  const latestValue = values.length
-    ? values[values.length - 1].toFixed(decimals)
-    : null;
-
-  const lineRgb = hexToRgb(color);
-  const labelRgb = hexToRgb(colors.muted);
-
-  const config = {
-    backgroundColor: colors.white,
-    backgroundGradientFrom: colors.white,
-    backgroundGradientTo: colors.white,
-    decimalPlaces: decimals,
-    color: (opacity = 1) => `rgba(${lineRgb}, ${opacity})`,
-    labelColor: (opacity = 1) => `rgba(${labelRgb}, ${opacity})`,
-    propsForDots: {
-      r: '3',
-      strokeWidth: '2',
-      stroke: color,
-    },
-    propsForBackgroundLines: {
-      stroke: 'rgba(0,0,0,0.06)',
-      strokeDasharray: '',
-    },
-    fillShadowGradient: color,
-    fillShadowGradientOpacity: 0.12,
-  };
-
-  return (
-    <View style={styles.chartBlock}>
-      <View style={styles.chartHeading}>
-        <View style={styles.chartHeadingText}>
-          <Text style={styles.chartTitle}>{title}</Text>
-          <Text style={styles.chartDescription}>{description}</Text>
-        </View>
-
-        {latestValue && (
-          <Text style={styles.chartValue}>
-            {latestValue}
-            <Text style={styles.chartUnit}>{unit}</Text>
-          </Text>
-        )}
-      </View>
-
-      {points.length < 2 ? (
-        <Text style={styles.chartEmptyText}>
-          At least two valid readings are needed to draw this graph.
-        </Text>
-      ) : (
-        <LineChart
-          // key forces a clean redraw when switching metric
-          key={metric.key}
-          data={{
-            labels,
-            datasets: [{ data: values }],
-          }}
-          width={CHART_WIDTH}
-          height={190}
-          chartConfig={config}
-          bezier
-          withDots
-          withInnerLines
-          withOuterLines={false}
-          withVerticalLines={false}
-          withHorizontalLabels
-          withVerticalLabels
-          fromZero={false}
-          decimalPlaces={decimals}
-          segments={4}
-          style={styles.chart}
-          yAxisSuffix={unit}
-          yAxisInterval={1}
-        />
-      )}
-    </View>
-  );
+  // Today, or a picked day
+  const from = startOfDay(range === 'day' && selectedDate ? selectedDate : now);
+  const dayEnd = new Date(from.getTime() + 86400000);
+  let to = dayEnd < now ? dayEnd : now;
+  if (to - from < 3600000) to = new Date(from.getTime() + 3600000); // at least 1 h
+  const minutes = (to - from) / 60000;
+  return { from, to, buckets: clamp(Math.round(minutes / 5), 24, 144), kind: 'day' };
 }
+
+const ALERT_LABEL = {
+  HIGH_RISK: { text: 'High risk', tone: 'salmon' },
+  MODERATE_RISK: { text: 'Moderate risk', tone: 'amber' },
+};
+
+// ---- Screen ---------------------------------------------------------------
 
 export default function HistoryScreen() {
   const { profile } = useAuth();
-
-  // The pet picked on the dashboard
   const selectedDogId = useSelectedDogId();
-  const [dogName, setDogName] = useState('');
-  const requestId = useRef(0);
 
+  const [dog, setDog] = useState(null);
+  const [range, setRange] = useState('today');
+  const [selectedDate, setSelectedDate] = useState(null);
+  const [eventId, setEventId] = useState(null);
+  const [metricKey, setMetricKey] = useState('surface');
+
+  const [history, setHistory] = useState(null); // { points, alerts, summary, events }
+  const [events, setEvents] = useState([]);
   const [records, setRecords] = useState([]);
+  const [expanded, setExpanded] = useState(false);
+  const [showDetails, setShowDetails] = useState(false); // tiles, %, other readings, records
+
   const [loading, setLoading] = useState(true);
   const [hasLoaded, setHasLoaded] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  const [metricKey, setMetricKey] = useState('surface');
-  const [expanded, setExpanded] = useState(false);
-
-  // null = latest readings, otherwise a Date at local midnight
-  const [selectedDate, setSelectedDate] = useState(null);
   const [showPicker, setShowPicker] = useState(false);
   const [tempDate, setTempDate] = useState(new Date());
 
-  const loadHistory = useCallback(async () => {
-    if (!profile?.id) {
-      setRecords([]);
-      setErrorMessage('Your profile could not be loaded. Please sign in again.');
-      setLoading(false);
-      setHasLoaded(true);
-      return;
-    }
+  const requestId = useRef(0);
+  const eventsRef = useRef([]); // latest events list, without reloading on change
 
-    // Ignore results from older requests (e.g. after switching pets)
-    const requestKey = ++requestId.current;
-    const isStale = () => requestKey !== requestId.current;
+  const event = events.find((e) => e.id === eventId) || null;
+  const win = useMemo(
+    () => getWindow(range, selectedDate, event),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [range, selectedDate, event?.id, history] // history: refresh "now" after each load
+  );
+
+  const loadHistory = useCallback(async () => {
+    if (!profile?.id) return;
+
+    const key = ++requestId.current;
+    const stale = () => key !== requestId.current;
 
     setLoading(true);
     setErrorMessage('');
 
     try {
-      // All of this owner's pets, oldest first (same order as the dashboard)
+      await loadAlertThresholds(supabase); // limits for the shaded bands
+
       const { data: dogs, error: dogError } = await supabase
         .from('dogs')
         .select('id, name')
         .eq('owner_id', profile.id)
+        .eq('is_archived', false)
         .order('created_at', { ascending: true });
-
       if (dogError) throw dogError;
 
-      // Use the pet selected on the dashboard; fall back to the first one
-      const dog = dogs?.find((d) => d.id === selectedDogId) || dogs?.[0];
-      const dogId = dog?.id;
+      const current = dogs?.find((d) => d.id === selectedDogId) || dogs?.[0] || null;
+      if (stale()) return;
+      setDog(current);
 
-      if (isStale()) return;
-      setDogName(dog?.name || '');
-
-      if (!dogId) {
+      if (!current) {
+        setHistory(null);
         setRecords([]);
         return;
       }
 
-      // Readings belong to the DOG, not the device. This keeps a pet's
-      // history even after its device is removed, transferred or lent,
-      // and never shows another dog's readings.
-      let query = supabase
-        .from('sensor_data')
-        .select('id, surface_temp, ambient_temp, humidity, timestamp_utc')
-        .eq('dog_id', dogId)
-        .order('timestamp_utc', { ascending: false });
+      const chosenEvent = eventsRef.current.find((e) => e.id === eventId) || null;
+      const w = getWindow(range, selectedDate, chosenEvent);
 
-      if (selectedDate) {
-        // Local day -> UTC range (the column stores UTC)
-        const start = startOfDay(selectedDate);
-        const end = new Date(start);
-        end.setDate(end.getDate() + 1);
+      const [hist, rows] = await Promise.all([
+        supabase.rpc('get_dog_history', {
+          p_dog_id: current.id,
+          p_from: w.from.toISOString(),
+          p_to: w.to.toISOString(),
+          p_buckets: w.buckets,
+        }),
+        supabase
+          .from('sensor_data')
+          .select('id, surface_temp, ambient_temp, humidity, risk_level, timestamp_utc')
+          .eq('dog_id', current.id)
+          .gte('timestamp_utc', w.from.toISOString())
+          .lt('timestamp_utc', w.to.toISOString())
+          .order('timestamp_utc', { ascending: false })
+          .limit(RECORD_LIMIT),
+      ]);
 
-        query = query
-          .gte('timestamp_utc', start.toISOString())
-          .lt('timestamp_utc', end.toISOString())
-          .limit(DAY_LIMIT);
-      } else {
-        query = query.limit(LATEST_LIMIT);
-      }
+      if (hist.error) throw hist.error;
+      if (rows.error) throw rows.error;
+      if (stale()) return;
 
-      const { data, error: historyError } = await query;
-
-      if (historyError) throw historyError;
-      if (isStale()) return;
-
-      setRecords(data || []);
-    } catch (error) {
-      if (isStale()) return;
-      console.error('Failed to load sensor history:', error);
-      setErrorMessage(
-        error?.message || 'Could not load sensor history. Please try again.'
-      );
+      setHistory(hist.data);
+      eventsRef.current = hist.data?.events || [];
+      setEvents(eventsRef.current);
+      setRecords(rows.data || []);
+    } catch (e) {
+      if (stale()) return;
+      console.error('History error:', e);
+      setErrorMessage(e?.message || 'Could not load history. Please try again.');
     } finally {
-      if (!isStale()) {
+      if (!stale()) {
         setLoading(false);
         setHasLoaded(true);
       }
     }
-  }, [profile?.id, selectedDate, selectedDogId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.id, selectedDogId, range, selectedDate, eventId]);
 
-  // Runs on focus and again whenever the picked date changes
   useFocusEffect(
     useCallback(() => {
       loadHistory();
     }, [loadHistory])
   );
 
-  // Switching pets: drop the previous pet's data immediately
+  // New pet: start fresh
   useEffect(() => {
+    setHistory(null);
     setRecords([]);
-    setDogName('');
+    setEvents([]);
+    eventsRef.current = [];
+    setEventId(null);
     setExpanded(false);
+    if (range === 'event') setRange('today');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDogId]);
 
-  // ---- Date picker ---------------------------------------------------
+  // "Event" picked: default to the most recent event
+  useEffect(() => {
+    if (range === 'event' && !eventId && events.length > 0) setEventId(events[0].id);
+  }, [range, eventId, events]);
+
+  // ---- Date picker -------------------------------------------------------
   const openPicker = () => {
     setTempDate(selectedDate || new Date());
     setShowPicker(true);
   };
-
   const applyDate = (date) => {
     setSelectedDate(startOfDay(date));
+    setRange('day');
     setExpanded(false);
   };
-
-  const clearDate = () => {
-    setSelectedDate(null);
-    setExpanded(false);
-  };
-
-  const onAndroidChange = (event, date) => {
+  const onAndroidChange = (e, date) => {
     setShowPicker(false);
-    if (event.type === 'set' && date) applyDate(date);
+    if (e.type === 'set' && date) applyDate(date);
   };
 
-  // ---- Derived values ------------------------------------------------
-  const latest = records[0];
-  const tone = tones.brand;
+  // ---- Derived -----------------------------------------------------------
   const metric = METRICS.find((m) => m.key === metricKey) || METRICS[0];
+  const summary = history?.summary || {};
+  const points = history?.points || [];
+  const alerts = history?.alerts || [];
+  const readings = Number(summary.readings) || 0;
+  const tier = dog ? getDogTier(dog.id) : 'normal';
+  const thresholds = getAlertThresholds(tier);
 
-  const surface = formatReading(latest?.surface_temp, '', 1);
-  const ambient = formatReading(latest?.ambient_temp, '', 1);
-  const humidity = formatReading(latest?.humidity, '', 1);
+  const high = Number(summary.high) || 0;
+  const moderate = Number(summary.moderate) || 0;
+  const low = Number(summary.low) || 0;
+  const judged = high + moderate + low;
+  const pct = (n) => (judged ? Math.round((n / judged) * 100) : 0);
 
-  const visibleRecords = records.slice(
-    0,
-    expanded ? EXPANDED_ROWS : COLLAPSED_ROWS
+  // ---- One-line summary for owners ----
+  const worst = high > 0 ? 'HIGH' : moderate > 0 ? 'MODERATE' : 'LOW';
+  const rangeWord =
+    range === 'week'
+      ? 'this week'
+      : range === 'event'
+      ? `at ${event?.name || 'the event'}`
+      : range === 'day' && selectedDate
+      ? `on ${selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })}`
+      : 'today';
+  const headline =
+    worst === 'HIGH'
+      ? `Some risky moments ${rangeWord}`
+      : worst === 'MODERATE'
+      ? `Mostly safe ${rangeWord}`
+      : `All safe ${rangeWord}`;
+  const hottest = points.reduce(
+    (best, p) =>
+      Number.isFinite(Number(p.surface_max)) && (!best || Number(p.surface_max) > Number(best.surface_max))
+        ? p
+        : best,
+    null
   );
-  const canExpand = records.length > COLLAPSED_ROWS;
-  const totalLabel =
-    records.length >= DAY_LIMIT && selectedDate
-      ? `${DAY_LIMIT}+ total`
-      : `${records.length} total`;
+  const headlineTone = tones[worst === 'HIGH' ? 'salmon' : worst === 'MODERATE' ? 'amber' : 'green'];
+  const chartMetric = showDetails ? metric : METRICS[0]; // owners see Surface only
 
   if (!hasLoaded) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.ink} />
-        <Text style={styles.loadingText}>Loading sensor history...</Text>
       </View>
     );
   }
@@ -416,55 +310,78 @@ export default function HistoryScreen() {
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
-            refreshing={loading}
+            refreshing={loading && hasLoaded}
             onRefresh={loadHistory}
             tintColor={colors.ink}
             colors={[colors.ink]}
           />
         }
       >
-        {/* Level 1: screen title */}
         <Text style={styles.title}>History</Text>
         <Text style={styles.subtitle}>
-          {dogName ? (
+          {dog ? (
             <>
-              Readings recorded for{' '}
-              <Text style={styles.subtitleName}>{dogName}</Text>.
+              Readings for <Text style={styles.subtitleName}>{dog.name}</Text>
             </>
           ) : (
-            "Temperature and humidity readings from your dog's device."
+            'Register a pet to see its history.'
           )}
         </Text>
 
-        {/* Date filter */}
-        <View style={styles.dateRow}>
+        {/* Range filter */}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipScroll}>
+          {RANGES.map((r) => {
+            const active = range === r.key;
+            const disabled = r.key === 'event' && events.length === 0;
+            return (
+              <TouchableOpacity
+                key={r.key}
+                style={[styles.chip, active && styles.chipActive, disabled && styles.chipDisabled]}
+                onPress={() => {
+                  if (disabled) return;
+                  setRange(r.key);
+                  setExpanded(false);
+                }}
+                activeOpacity={0.8}
+                accessibilityState={{ selected: active, disabled }}
+              >
+                <Text style={[styles.chipText, active && styles.chipTextActive]}>{r.label}</Text>
+              </TouchableOpacity>
+            );
+          })}
           <TouchableOpacity
-            style={[styles.dateButton, selectedDate && styles.dateButtonActive]}
+            style={[styles.chip, range === 'day' && styles.chipActive]}
             onPress={openPicker}
             activeOpacity={0.8}
-            accessibilityLabel="Pick a date"
+            accessibilityLabel="Pick a day"
           >
-            <Icon
-              name="calendar-outline"
-              size={18}
-              color={selectedDate ? colors.onAccent : colors.ink}
-            />
-            <Text
-              style={[
-                styles.dateButtonText,
-                selectedDate && styles.dateButtonTextActive,
-              ]}
-            >
-              {selectedDate ? formatDay(selectedDate) : 'Pick a date'}
+            <Text style={[styles.chipText, range === 'day' && styles.chipTextActive]}>
+              {range === 'day' && selectedDate
+                ? selectedDate.toLocaleDateString([], { month: 'short', day: 'numeric' })
+                : 'Pick a day'}
             </Text>
           </TouchableOpacity>
+        </ScrollView>
 
-          {selectedDate && (
-            <TouchableOpacity onPress={clearDate} style={styles.clearButton}>
-              <Text style={styles.clearText}>Show latest</Text>
-            </TouchableOpacity>
-          )}
-        </View>
+        {/* Which event */}
+        {range === 'event' && events.length > 1 && (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.eventScroll}>
+            {events.map((e) => {
+              const active = e.id === eventId;
+              return (
+                <TouchableOpacity
+                  key={e.id}
+                  style={[styles.eventChip, active && styles.eventChipActive]}
+                  onPress={() => setEventId(e.id)}
+                >
+                  <Text style={[styles.eventChipText, active && styles.eventChipTextActive]} numberOfLines={1}>
+                    {e.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        )}
 
         {!!errorMessage && (
           <View style={styles.errorCard}>
@@ -473,190 +390,210 @@ export default function HistoryScreen() {
           </View>
         )}
 
-        {records.length === 0 && loading ? (
+        {readings === 0 ? (
           <View style={styles.empty}>
-            <ActivityIndicator color={colors.ink} />
-          </View>
-        ) : records.length === 0 ? (
-          <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>
-              {selectedDate
-                ? `No readings on ${formatDay(selectedDate)}`
-                : 'No readings yet'}
-            </Text>
-            <Text style={styles.emptyText}>
-              {selectedDate
-                ? 'Try another date, or go back to the latest readings.'
-                : 'Once your registered PawGuard device uploads sensor readings, your graphs and history will appear here.'}
-            </Text>
+            {loading ? (
+              <ActivityIndicator color={colors.ink} />
+            ) : (
+              <>
+                <Text style={styles.emptyTitle}>No readings</Text>
+                <Text style={styles.emptyText}>
+                  The collar didn't send anything in this time. Try another range.
+                </Text>
+              </>
+            )}
           </View>
         ) : (
           <>
-            {/* The one boxed element: latest (or end-of-day) reading */}
-            <View style={[styles.hero, { backgroundColor: tone.bg }]}>
-              <View style={styles.heroTop}>
-                <Text style={[styles.heroMeta, { color: tone.sub }]}>
-                  {selectedDate ? 'Last reading that day' : 'Latest reading'}
-                </Text>
-                <Text style={[styles.heroMeta, { color: tone.sub }]}>
-                  {formatShort(latest?.timestamp_utc)}
-                </Text>
-              </View>
-
-              <Text style={[styles.heroValue, { color: tone.text }]}>
-                {surface}
-                {surface !== '--' && <Text style={styles.heroUnit}>°C</Text>}
+            {/* The answer, in one line */}
+            <View style={[styles.headline, { backgroundColor: headlineTone.bg }]}>
+              <Text style={[styles.headlineTitle, { color: headlineTone.text }]}>{headline}</Text>
+              <Text style={[styles.headlineSub, { color: headlineTone.sub }]}>
+                {alerts.length === 0 ? 'No alerts' : `${alerts.length} alert${alerts.length === 1 ? '' : 's'}`}
+                {hottest
+                  ? `  ·  Hottest ${num(hottest.surface_max)} °C at ${formatTime(toDate(hottest.t), win.kind !== 'day')}`
+                  : ''}
               </Text>
-              <Text style={[styles.heroLabel, { color: tone.sub }]}>
-                Surface temperature
-              </Text>
-
-              <View style={styles.heroDivider} />
-
-              <View style={styles.heroRow}>
-                <View style={styles.heroCol}>
-                  <Text style={[styles.heroColLabel, { color: tone.sub }]}>
-                    Ambient
-                  </Text>
-                  <Text style={[styles.heroColValue, { color: tone.text }]}>
-                    {ambient}
-                    {ambient !== '--' && (
-                      <Text style={styles.heroColUnit}> °C</Text>
-                    )}
-                  </Text>
-                </View>
-
-                <View style={styles.heroCol}>
-                  <Text style={[styles.heroColLabel, { color: tone.sub }]}>
-                    Humidity
-                  </Text>
-                  <Text style={[styles.heroColValue, { color: tone.text }]}>
-                    {humidity}
-                    {humidity !== '--' && (
-                      <Text style={styles.heroColUnit}> %</Text>
-                    )}
-                  </Text>
-                </View>
-              </View>
             </View>
 
-            {/* Level 2: Trends with a button switcher (one chart at a time) */}
-            <Text style={styles.sectionTitle}>Trends</Text>
-            <Text style={styles.sectionHint}>
-              {selectedDate ? 'Across the day' : 'Last 10 readings'}
-            </Text>
+            {/* Bar chart: hottest temperature per hour / day, colored by risk */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Temperature</Text>
+              {loading && <ActivityIndicator size="small" color={colors.muted} />}
+            </View>
+            <TempBars points={points} from={win.from} to={win.to} kind={win.kind} />
 
+            {/* Alerts in this range */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Alerts</Text>
+              <Text style={styles.count}>{alerts.length}</Text>
+            </View>
+            {alerts.length === 0 ? (
+              <Text style={styles.muted}>No alerts in this time.</Text>
+            ) : (
+              alerts
+                .slice()
+                .reverse()
+                .slice(0, 5)
+                .map((a, i, list) => {
+                  const style = ALERT_LABEL[a.type] || { text: 'Alert', tone: 'beige' };
+                  const t = tones[style.tone];
+                  return (
+                    <View key={`${a.t}-${i}`} style={[styles.alertRow, i === list.length - 1 && styles.rowLast]}>
+                      <View style={[styles.alertDot, { backgroundColor: t.pillText }]} />
+                      <View style={styles.alertText}>
+                        <Text style={styles.alertTitle}>
+                          {style.text}
+                          {a.reason ? ` · ${a.reason}` : ''}
+                        </Text>
+                        <Text style={styles.alertTime}>
+                          {formatTime(toDate(a.t), win.kind !== 'day')}
+                          {a.surface != null ? `  ·  ${num(a.surface)} °C` : ''}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+            )}
+
+            {/* Everything else, one tap away */}
+            <TouchableOpacity
+              style={styles.detailsToggle}
+              onPress={() => {
+                setShowDetails((v) => !v);
+                if (showDetails) setMetricKey('surface');
+              }}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.detailsText}>{showDetails ? 'Hide details' : 'More details'}</Text>
+              <Icon name={showDetails ? 'chevron-up' : 'chevron-down'} size={16} color={colors.ink} />
+            </TouchableOpacity>
+
+            {showDetails && (
+            <>
+            {/* Detailed chart (for the curious, and for the panel) */}
+            <Text style={styles.sectionTitle}>{chartMetric.title}</Text>
             <View style={styles.metricRow}>
-              {METRICS.map((item) => {
-                const active = item.key === metricKey;
+              {METRICS.map((m) => {
+                const active = m.key === metricKey;
                 return (
                   <TouchableOpacity
-                    key={item.key}
+                    key={m.key}
                     style={[styles.metricChip, active && styles.metricChipActive]}
-                    onPress={() => setMetricKey(item.key)}
+                    onPress={() => setMetricKey(m.key)}
                     activeOpacity={0.8}
                   >
-                    <Text
-                      style={[
-                        styles.metricChipText,
-                        active && styles.metricChipTextActive,
-                      ]}
-                    >
-                      {item.label}
+                    <Text style={[styles.metricChipText, active && styles.metricChipTextActive]}>
+                      {m.label}
                     </Text>
                   </TouchableOpacity>
                 );
               })}
             </View>
-
-            <SensorChart
-              metric={metric}
-              records={records}
-              wholeDay={!!selectedDate}
+            <HistoryChart
+              width={CHART_WIDTH}
+              points={points}
+              alerts={alerts}
+              from={win.from}
+              to={win.to}
+              metric={chartMetric.key}
+              unit={chartMetric.unit}
+              color={chartMetric.color}
+              thresholds={thresholds}
+              kind={win.kind}
             />
 
-            {/* Records: 5 rows, then expand */}
-            <View style={styles.recordsHeader}>
-              <Text style={styles.sectionTitleFlat}>
-                {selectedDate ? 'Records' : 'Recent records'}
+            {/* Highest / average / lowest */}
+            <View style={styles.tiles}>
+              {[
+                ['Highest', summary[`${chartMetric.key}_max`]],
+                ['Average', summary[`${chartMetric.key}_avg`]],
+                ['Lowest', summary[`${chartMetric.key}_min`]],
+              ].map(([label, value]) => (
+                <View key={label} style={styles.tile}>
+                  <Text style={styles.tileLabel}>{label}</Text>
+                  <Text style={styles.tileValue}>
+                    {num(value, chartMetric.key === 'humidity' ? 0 : 1)}
+                    <Text style={styles.tileUnit}>{chartMetric.unit}</Text>
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            {/* Time at each risk level */}
+            {judged > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Time at each risk level</Text>
+                <View style={styles.riskBar}>
+                  {[
+                    [low, tones.green.pillText],
+                    [moderate, tones.amber.pillText],
+                    [high, colors.danger],
+                  ].map(([n, c], i) =>
+                    n > 0 ? <View key={i} style={{ flex: n, backgroundColor: c }} /> : null
+                  )}
+                </View>
+                <View style={styles.riskLegend}>
+                  <Text style={styles.riskText}>
+                    <Text style={[styles.riskStrong, { color: tones.green.pillText }]}>{pct(low)}%</Text> Low
+                  </Text>
+                  <Text style={styles.riskText}>
+                    <Text style={[styles.riskStrong, { color: tones.amber.pillText }]}>{pct(moderate)}%</Text> Moderate
+                  </Text>
+                  <Text style={styles.riskText}>
+                    <Text style={[styles.riskStrong, { color: colors.danger }]}>{pct(high)}%</Text> High
+                  </Text>
+                </View>
+              </>
+            )}
+
+            {/* Raw records */}
+            <View style={styles.sectionHeader}>
+              <Text style={styles.sectionTitle}>Records</Text>
+              <Text style={styles.count}>
+                {readings > RECORD_LIMIT ? `latest ${RECORD_LIMIT} of ${readings}` : readings}
               </Text>
-              <Text style={styles.recordCount}>{totalLabel}</Text>
             </View>
 
             <View style={styles.tableHead}>
               <Text style={[styles.th, styles.dateCol]}>Time</Text>
-              <Text style={[styles.th, styles.numCol]}>Surface °C</Text>
-              <Text style={[styles.th, styles.numCol]}>Ambient °C</Text>
-              <Text style={[styles.th, styles.numCol]}>Humidity %</Text>
+              <Text style={[styles.th, styles.numCol]}>Surface</Text>
+              <Text style={[styles.th, styles.numCol]}>Air</Text>
+              <Text style={[styles.th, styles.numCol]}>Humid.</Text>
             </View>
 
-            {visibleRecords.map((item) => {
-              const date = parseDate(item.timestamp_utc);
-
+            {records.slice(0, expanded ? RECORD_LIMIT : COLLAPSED_ROWS).map((r) => {
+              const d = toDate(r.timestamp_utc);
+              const riskColor =
+                r.risk_level === 'HIGH'
+                  ? colors.danger
+                  : r.risk_level === 'MODERATE'
+                  ? tones.amber.pillText
+                  : colors.ink;
               return (
-                <View key={item.id} style={styles.tr}>
-                  <View style={styles.dateCol}>
-                    <Text style={styles.rowDate}>
-                      {date
-                        ? date.toLocaleDateString([], {
-                            month: 'short',
-                            day: 'numeric',
-                          })
-                        : '--'}
-                    </Text>
-                    <Text style={styles.rowTime}>
-                      {date
-                        ? date.toLocaleTimeString([], {
-                            hour: 'numeric',
-                            minute: '2-digit',
-                          })
-                        : ''}
-                    </Text>
-                  </View>
-
-                  <Text style={[styles.td, styles.numCol]}>
-                    {formatReading(item.surface_temp, '', 1)}
-                  </Text>
-                  <Text style={[styles.td, styles.numCol]}>
-                    {formatReading(item.ambient_temp, '', 1)}
-                  </Text>
-                  <Text style={[styles.td, styles.numCol]}>
-                    {formatReading(item.humidity, '', 1)}
-                  </Text>
+                <View key={r.id} style={styles.tr}>
+                  <Text style={[styles.td, styles.dateCol]}>{formatTime(d, win.kind !== 'day')}</Text>
+                  <Text style={[styles.td, styles.numCol, { color: riskColor }]}>{num(r.surface_temp)}</Text>
+                  <Text style={[styles.td, styles.numCol]}>{num(r.ambient_temp)}</Text>
+                  <Text style={[styles.td, styles.numCol]}>{num(r.humidity, 0)}</Text>
                 </View>
               );
             })}
 
-            {canExpand && (
-              <TouchableOpacity
-                style={styles.expandButton}
-                onPress={() => setExpanded((value) => !value)}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.expandText}>
-                  {expanded
-                    ? 'Show less'
-                    : `Show all ${Math.min(records.length, EXPANDED_ROWS)} records`}
-                </Text>
-                <Icon
-                  name={expanded ? 'chevron-up' : 'chevron-down'}
-                  size={16}
-                  color={colors.ink}
-                />
+            {records.length > COLLAPSED_ROWS && (
+              <TouchableOpacity style={styles.expandButton} onPress={() => setExpanded((v) => !v)}>
+                <Text style={styles.expandText}>{expanded ? 'Show less' : `Show ${records.length} records`}</Text>
+                <Icon name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.ink} />
               </TouchableOpacity>
             )}
-
-            {expanded && records.length > EXPANDED_ROWS && (
-              <Text style={styles.cap}>
-                Showing the latest {EXPANDED_ROWS}. Pick a shorter day to see
-                fewer records.
-              </Text>
+            </>
             )}
           </>
         )}
 
         <Text style={styles.footer}>
-          Sensor readings are for monitoring and are not a veterinary diagnosis.
+          Shaded bands use your pet's alert limits. Readings are for monitoring, not a
+          veterinary diagnosis.
         </Text>
       </ScrollView>
 
@@ -671,26 +608,17 @@ export default function HistoryScreen() {
         />
       )}
 
-      {/* iOS: bottom sheet with Cancel / Done */}
+      {/* iOS: bottom sheet */}
       {Platform.OS === 'ios' && (
-        <Modal
-          visible={showPicker}
-          transparent
-          animationType="slide"
-          onRequestClose={() => setShowPicker(false)}
-        >
+        <Modal visible={showPicker} transparent animationType="slide" onRequestClose={() => setShowPicker(false)}>
           <View style={styles.backdrop}>
-            <TouchableOpacity
-              style={styles.backdropDismiss}
-              activeOpacity={1}
-              onPress={() => setShowPicker(false)}
-            />
+            <TouchableOpacity style={styles.backdropDismiss} activeOpacity={1} onPress={() => setShowPicker(false)} />
             <View style={styles.sheet}>
               <View style={styles.sheetHeader}>
                 <TouchableOpacity onPress={() => setShowPicker(false)}>
                   <Text style={styles.sheetCancel}>Cancel</Text>
                 </TouchableOpacity>
-                <Text style={styles.sheetTitle}>Select date</Text>
+                <Text style={styles.sheetTitle}>Pick a day</Text>
                 <TouchableOpacity
                   onPress={() => {
                     applyDate(tempDate);
@@ -700,7 +628,6 @@ export default function HistoryScreen() {
                   <Text style={styles.sheetDone}>Done</Text>
                 </TouchableOpacity>
               </View>
-
               <DateTimePicker
                 value={tempDate}
                 mode="date"
@@ -708,9 +635,7 @@ export default function HistoryScreen() {
                 maximumDate={new Date()}
                 themeVariant="light"
                 accentColor={colors.accent}
-                onChange={(event, date) => {
-                  if (date) setTempDate(date);
-                }}
+                onChange={(e, date) => date && setTempDate(date)}
               />
             </View>
           </View>
@@ -721,399 +646,188 @@ export default function HistoryScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.white,
-  },
-  content: {
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 120,
-  },
-  center: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.white,
-  },
-  loadingText: {
-    marginTop: 12,
-    fontFamily: fonts.regular,
-    color: colors.muted,
-  },
+  container: { flex: 1, backgroundColor: colors.white },
+  content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 120 },
+  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.white },
 
-  // Level 1
-  title: {
-    fontFamily: fonts.medium,
-    fontSize: 28,
-    color: colors.ink,
-  },
-  subtitle: {
-    fontFamily: fonts.regular,
-    fontSize: 14,
-    lineHeight: 21,
-    color: colors.muted,
-    marginTop: 4,
-    marginBottom: 20,
-  },
+  title: { fontFamily: fonts.medium, fontSize: 28, color: colors.ink },
+  subtitle: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, marginTop: 4, marginBottom: 16 },
+  subtitleName: { fontFamily: fonts.medium, color: colors.ink },
 
-  subtitleName: {
-    fontFamily: fonts.medium,
-    color: colors.ink,
-  },
-
-  // Date filter
-  dateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 22,
-  },
-  dateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    height: 42,
+  // Range chips
+  chipScroll: { flexGrow: 0, marginBottom: 8 },
+  chip: {
+    height: 40,
     paddingHorizontal: 16,
-    borderRadius: 21,
+    borderRadius: 20,
+    marginRight: 8,
+    justifyContent: 'center',
     backgroundColor: colors.pill,
   },
-  dateButtonActive: {
-    backgroundColor: colors.accent,
-  },
-  dateButtonText: {
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    color: colors.ink,
-  },
-  dateButtonTextActive: {
-    color: colors.onAccent,
-  },
-  clearButton: {
-    paddingHorizontal: 14,
-    height: 42,
-    justifyContent: 'center',
-  },
-  clearText: {
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    color: colors.muted,
-  },
+  chipActive: { backgroundColor: colors.accent },
+  chipDisabled: { opacity: 0.4 },
+  chipText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
+  chipTextActive: { color: colors.onAccent },
 
-  // Hero card (only boxed element besides errors)
-  hero: {
-    borderRadius: 30,
-    paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 22,
+  eventScroll: { flexGrow: 0, marginTop: 4, marginBottom: 4 },
+  eventChip: {
+    height: 34,
+    maxWidth: 200,
+    paddingHorizontal: 14,
+    borderRadius: 17,
+    marginRight: 8,
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: colors.line,
   },
-  heroTop: {
+  eventChipActive: { borderColor: colors.ink },
+  eventChipText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  eventChipTextActive: { fontFamily: fonts.medium, color: colors.ink },
+
+  sectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
   },
-  heroMeta: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-  },
-  heroValue: {
-    fontFamily: fonts.medium,
-    fontSize: 52,
-    lineHeight: 62,
-    marginTop: 16,
-  },
-  heroUnit: {
-    fontFamily: fonts.regular,
-    fontSize: 22,
-  },
-  heroLabel: {
-    fontFamily: fonts.regular,
-    fontSize: 14,
-    marginTop: -2,
-  },
-  heroDivider: {
-    height: StyleSheet.hairlineWidth,
-    backgroundColor: 'rgba(0,0,0,0.15)',
-    marginTop: 18,
-    marginBottom: 16,
-  },
-  heroRow: {
-    flexDirection: 'row',
-  },
-  heroCol: {
-    flex: 1,
-  },
-  heroColLabel: {
-    fontFamily: fonts.regular,
-    fontSize: 12,
-    marginBottom: 2,
-  },
-  heroColValue: {
-    fontFamily: fonts.medium,
-    fontSize: 20,
-  },
-  heroColUnit: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-  },
-
-  // Level 2
   sectionTitle: {
     fontFamily: fonts.semibold,
     fontSize: 18,
     color: colors.ink,
-    marginTop: 36,
+    marginTop: 24,
+    marginBottom: 10,
+    paddingHorizontal: 2,
   },
-  sectionTitleFlat: {
-    fontFamily: fonts.semibold,
-    fontSize: 18,
-    color: colors.ink,
-  },
-  sectionHint: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    color: colors.muted,
-    marginTop: 2,
-    marginBottom: 16,
-  },
+  count: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted, marginTop: 14 },
 
-  // Metric buttons
-  metricRow: {
+  // One-line answer
+  headline: { borderRadius: 24, paddingHorizontal: 20, paddingVertical: 16, marginTop: 14 },
+  headlineTitle: { fontFamily: fonts.medium, fontSize: 20 },
+  headlineSub: { fontFamily: fonts.regular, fontSize: 13, marginTop: 4 },
+
+  detailsToggle: {
     flexDirection: 'row',
-    gap: 8,
-    marginBottom: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 6,
+    height: 48,
+    marginTop: 16,
+    borderRadius: 24,
+    backgroundColor: colors.pill,
   },
+  detailsText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
+  muted: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, paddingHorizontal: 2 },
+
+  // Metric switch
+  metricRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
   metricChip: {
-    height: 38,
-    paddingHorizontal: 18,
-    borderRadius: 19,
+    height: 36,
+    paddingHorizontal: 16,
+    borderRadius: 18,
     justifyContent: 'center',
     backgroundColor: colors.white,
     borderWidth: 2,
     borderColor: colors.line,
   },
-  metricChipActive: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
-  metricChipText: {
-    fontFamily: fonts.regular,
-    fontSize: 14,
-    color: colors.ink,
-  },
-  metricChipTextActive: {
-    color: colors.onAccent,
-  },
+  metricChipActive: { backgroundColor: colors.accent, borderColor: colors.accent },
+  metricChipText: { fontFamily: fonts.regular, fontSize: 13, color: colors.ink },
+  metricChipTextActive: { color: colors.onAccent },
 
-  // Chart (no box)
-  chartBlock: {
-    marginBottom: 36,
-  },
-  chartHeading: {
+  // Tiles
+  tiles: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  tile: { flex: 1, backgroundColor: colors.tile, borderRadius: 20, paddingVertical: 14, paddingHorizontal: 14 },
+  tileLabel: { fontFamily: fonts.regular, fontSize: 12, letterSpacing: 0.6, color: colors.tileLabel },
+  tileValue: { fontFamily: fonts.medium, fontSize: 19, color: colors.ink, marginTop: 4 },
+  tileUnit: { fontFamily: fonts.regular, fontSize: 13, color: colors.tileLabel },
+
+  // Risk bar
+  riskBar: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-end',
-    marginBottom: 6,
+    height: 12,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: colors.tile,
   },
-  chartHeadingText: {
-    flex: 1,
-    paddingRight: 12,
+  riskLegend: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8, paddingHorizontal: 2 },
+  riskText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  riskStrong: { fontFamily: fonts.semibold },
+
+  // Alerts
+  alertRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
-  chartTitle: {
-    fontFamily: fonts.medium,
-    fontSize: 16,
-    color: colors.ink,
-  },
-  chartDescription: {
-    fontFamily: fonts.regular,
-    fontSize: 12,
-    color: colors.muted,
-    marginTop: 1,
-  },
-  chartValue: {
-    fontFamily: fonts.medium,
-    fontSize: 22,
-    color: colors.ink,
-  },
-  chartUnit: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    color: colors.muted,
-  },
-  chart: {
-    marginLeft: -20,
-  },
-  chartEmptyText: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 20,
-    color: colors.muted,
-    paddingVertical: 24,
-  },
+  rowLast: { borderBottomWidth: 0 },
+  alertDot: { width: 10, height: 10, borderRadius: 5 },
+  alertText: { flex: 1 },
+  alertTitle: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
+  alertTime: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 2 },
 
   // Table
-  recordsHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'baseline',
-    marginBottom: 14,
-  },
-  recordCount: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    color: colors.muted,
-  },
   tableHead: {
     flexDirection: 'row',
-    alignItems: 'flex-end',
     paddingBottom: 8,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
   },
-  th: {
-    fontFamily: fonts.regular,
-    fontSize: 11,
-    color: colors.muted,
-  },
+  th: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted },
   tr: {
     flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 12,
+    paddingVertical: 10,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.line,
   },
-  dateCol: {
-    flex: 1.3,
-  },
-  numCol: {
-    flex: 1,
-    textAlign: 'right',
-  },
-  td: {
-    fontFamily: fonts.medium,
-    fontSize: 15,
-    color: colors.ink,
-  },
-  rowDate: {
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    color: colors.ink,
-  },
-  rowTime: {
-    fontFamily: fonts.regular,
-    fontSize: 12,
-    color: colors.muted,
-    marginTop: 1,
-  },
+  td: { fontFamily: fonts.regular, fontSize: 13, color: colors.ink },
+  dateCol: { flex: 1.6 },
+  numCol: { flex: 1, textAlign: 'right' },
   expandButton: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    height: 48,
-    marginTop: 8,
-    borderRadius: 24,
-    backgroundColor: colors.pill,
-  },
-  expandText: {
-    fontFamily: fonts.medium,
-    fontSize: 14,
-    color: colors.ink,
-  },
-  cap: {
-    fontFamily: fonts.regular,
-    fontSize: 12,
-    color: colors.muted,
-    textAlign: 'center',
-    marginTop: 10,
-  },
-
-  // Error (important, so it keeps a box)
-  errorCard: {
-    backgroundColor: tones.salmon.bg,
-    borderRadius: 24,
-    padding: 18,
-    marginBottom: 20,
-  },
-  errorTitle: {
-    fontFamily: fonts.medium,
-    fontSize: 15,
-    color: tones.salmon.text,
-    marginBottom: 4,
-  },
-  errorText: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 20,
-    color: tones.salmon.pillText,
-  },
-
-  // Empty
-  empty: {
-    marginTop: 28,
     alignItems: 'center',
-    paddingHorizontal: 12,
+    gap: 6,
+    height: 44,
+    marginTop: 4,
   },
-  emptyTitle: {
-    fontFamily: fonts.medium,
-    fontSize: 17,
-    color: colors.ink,
-    marginBottom: 6,
-    textAlign: 'center',
-  },
-  emptyText: {
-    fontFamily: fonts.regular,
-    fontSize: 13,
-    lineHeight: 20,
-    color: colors.muted,
-    textAlign: 'center',
-  },
+  expandText: { fontFamily: fonts.medium, fontSize: 14, color: colors.ink },
 
+  // States
+  errorCard: { backgroundColor: tones.salmon.bg, borderRadius: 20, padding: 16, marginTop: 12 },
+  errorTitle: { fontFamily: fonts.semibold, fontSize: 15, color: tones.salmon.text },
+  errorText: { fontFamily: fonts.regular, fontSize: 13, color: tones.salmon.text, marginTop: 4 },
+  empty: { alignItems: 'center', paddingVertical: 40 },
+  emptyTitle: { fontFamily: fonts.medium, fontSize: 18, color: colors.ink },
+  emptyText: { fontFamily: fonts.regular, fontSize: 14, color: colors.muted, textAlign: 'center', marginTop: 6 },
   footer: {
     fontFamily: fonts.regular,
+    fontSize: 11,
+    lineHeight: 16,
     color: colors.muted,
     textAlign: 'center',
-    fontSize: 11,
-    lineHeight: 17,
     marginTop: 28,
   },
 
   // iOS date sheet
-  backdrop: {
-    flex: 1,
-    justifyContent: 'flex-end',
-    backgroundColor: 'rgba(0,0,0,0.35)',
-  },
-  backdropDismiss: {
-    flex: 1,
-  },
+  backdrop: { flex: 1, justifyContent: 'flex-end', backgroundColor: 'rgba(0,0,0,0.3)' },
+  backdropDismiss: { flex: 1 },
   sheet: {
     backgroundColor: colors.white,
-    borderTopLeftRadius: 30,
-    borderTopRightRadius: 30,
-    paddingHorizontal: 16,
-    paddingTop: 18,
-    paddingBottom: 32,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingBottom: 30,
   },
   sheetHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 6,
-    marginBottom: 8,
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
   },
-  sheetTitle: {
-    fontFamily: fonts.semibold,
-    fontSize: 16,
-    color: colors.ink,
-  },
-  sheetCancel: {
-    fontFamily: fonts.regular,
-    fontSize: 15,
-    color: colors.muted,
-  },
-  sheetDone: {
-    fontFamily: fonts.semibold,
-    fontSize: 15,
-    color: colors.ink,
-  },
+  sheetCancel: { fontFamily: fonts.regular, fontSize: 16, color: colors.muted },
+  sheetTitle: { fontFamily: fonts.semibold, fontSize: 16, color: colors.ink },
+  sheetDone: { fontFamily: fonts.semibold, fontSize: 16, color: colors.ink },
 });

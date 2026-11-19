@@ -67,14 +67,29 @@ export default function CustomTabBar({ state, descriptors, navigation }) {
               activeOpacity={0.8}
               accessibilityRole="button"
               accessibilityState={focused ? { selected: true } : {}}
-              accessibilityLabel={options.tabBarAccessibilityLabel || label}
+              accessibilityLabel={
+                options.tabBarAccessibilityLabel ||
+                (options.tabBarBadge ? `${label}, ${options.tabBarBadge} unread` : label)
+              }
               style={[styles.item, focused && styles.itemActive]}
             >
-              <Icon
-                name={icon}
-                size={21}
-                color={focused ? colors.onAccent : 'rgba(47,45,41,0.55)'}
-              />
+              <View>
+                <Icon
+                  name={icon}
+                  size={21}
+                  color={focused ? colors.onAccent : 'rgba(47,45,41,0.55)'}
+                />
+                {/* Unread count, e.g. on Alerts. Set with options.tabBarBadge */}
+                {!!options.tabBarBadge && (
+                  <View style={[styles.badge, focused && styles.badgeOnActive]}>
+                    <Text style={styles.badgeText}>
+                      {typeof options.tabBarBadge === 'number' && options.tabBarBadge > 9
+                        ? '9+'
+                        : options.tabBarBadge}
+                    </Text>
+                  </View>
+                )}
+              </View>
               {focused && <Text style={styles.label}>{label}</Text>}
             </TouchableOpacity>
           );
@@ -90,7 +105,7 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
   },
   bar: {
     flexDirection: 'row',
@@ -102,7 +117,7 @@ const styles = StyleSheet.create({
   item: {
     height: 42,
     minWidth: 42,
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     borderRadius: 21,
     flexDirection: 'row',
     alignItems: 'center',
@@ -111,11 +126,33 @@ const styles = StyleSheet.create({
   },
   itemActive: {
     backgroundColor: colors.accent,
-    paddingHorizontal: 16,
+    paddingHorizontal: 14,
   },
   label: {
     fontFamily: fonts.medium,
     fontSize: 13,
     color: colors.onAccent,
+  },
+  badge: {
+    position: 'absolute',
+    top: -6,
+    right: -9,
+    minWidth: 17,
+    height: 17,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.danger,
+    borderWidth: 1.5,
+    borderColor: colors.white,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  badgeOnActive: {
+    borderColor: colors.accent,
+  },
+  badgeText: {
+    fontFamily: fonts.bold,
+    fontSize: 9,
+    color: colors.white,
   },
 });

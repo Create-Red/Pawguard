@@ -204,7 +204,7 @@ export default function CreateEventScreen({ navigation }) {
         [
           {
             text: 'View My Events',
-            onPress: () => navigation.navigate('ManageEvent'),
+            onPress: () => navigation.navigate('OrganizerTabs', { screen: 'ManageEvents' })
           },
           {
             text: 'Done',

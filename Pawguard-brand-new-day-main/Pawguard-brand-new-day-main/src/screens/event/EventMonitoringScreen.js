@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -16,7 +17,12 @@ import Icon from '../../components/Icon';
 import Glass from '../../components/Glass';
 import { supabase } from '../../config/supabase';
 // One risk calculation for the whole app (same as the owner dashboard)
-import { calculateHealthRisk, loadAlertThresholds } from '../../utils/healthRisk';
+import {
+  calculateHealthRisk,
+  formatRiskReasons,
+  getRiskReasons,
+  loadAlertThresholds,
+} from '../../utils/healthRisk';
 import { colors, fonts, tones } from '../../Theme';
 
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;   // reading newer than this = online
@@ -73,11 +79,16 @@ export const getMonitoringPhase = (event, now = Date.now()) => {
 };
 
 // Card colour + pill text follow the dog's state
-function getCardStyle(deviceStatus, risk) {
+// reason: e.g. "Too hot & humid" -> pill says "High · Too hot & humid"
+function getCardStyle(deviceStatus, risk, reason) {
   if (deviceStatus === 'NO DEVICE') return { tone: tones.beige, label: 'No device' };
   if (deviceStatus === 'OFFLINE') return { tone: tones.beige, label: 'Offline' };
-  if (risk === 'HIGH') return { tone: tones.salmon, label: 'High risk' };
-  if (risk === 'MODERATE') return { tone: tones.amber, label: 'Moderate risk' };
+  if (risk === 'HIGH') {
+    return { tone: tones.salmon, label: reason ? `High · ${reason}` : 'High risk' };
+  }
+  if (risk === 'MODERATE') {
+    return { tone: tones.amber, label: reason ? `Moderate · ${reason}` : 'Moderate risk' };
+  }
   if (risk === 'LOW') return { tone: tones.green, label: 'Low risk' };
   return { tone: tones.beige, label: 'Unknown' };
 }
@@ -101,6 +112,8 @@ const toItem = (row) => {
   const lastMs = toMillis(row.reading_at);
   const sensor = row.reading_at
     ? {
+        dog_id: row.dog_id,
+        risk_tier: row.risk_tier, // breed heat-risk level from the server
         surface_temp: row.surface_temp,
         ambient_temp: row.ambient_temp,
         humidity: row.humidity,
@@ -130,11 +143,17 @@ const toItem = (row) => {
     breed: row.breed,
     ownerName: row.owner_name,
     battery: row.battery_pct,
+    checkedIn: !!row.checked_in_at,
     sensor,
     lastMs,
     deviceStatus,
     // Stale readings are never judged (same rule as the owner dashboard)
-    healthRisk: deviceStatus === 'ONLINE' ? calculateHealthRisk(sensor) : 'UNKNOWN',
+    healthRisk: deviceStatus === 'ONLINE' ? calculateHealthRisk(sensor, row.risk_tier) : 'UNKNOWN',
+    // Why: "Too hot", "Too cold & dry"... (empty when Low / offline)
+    riskReason:
+      deviceStatus === 'ONLINE'
+        ? formatRiskReasons(getRiskReasons(sensor, row.risk_tier))
+        : '',
     gps: hasGps ? { latitude: lat, longitude: lng } : null,
     gpsMs: toMillis(row.gps_at),
   };
@@ -170,7 +189,7 @@ function Tiles({ sensor, dim }) {
   );
 }
 
-function PhaseNotice({ phase, event }) {
+function PhaseNotice({ phase, event, onReport }) {
   const content = {
     upcoming: {
       tone: tones.brand,
@@ -208,13 +227,18 @@ function PhaseNotice({ phase, event }) {
       </View>
       <Text style={styles.noticeTitle}>{content.title}</Text>
       <Text style={styles.noticeText}>{content.text}</Text>
+      {phase === 'ended' && onReport && (
+        <TouchableOpacity style={styles.reportButton} activeOpacity={0.85} onPress={onReport}>
+          <Text style={styles.reportButtonText}>View event report</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
 
 // ---- Screen --------------------------------------------------------------
 
-export default function EventMonitoringScreen({ route }) {
+export default function EventMonitoringScreen({ route, navigation }) {
   const insets = useSafeAreaInsets();
   const eventId = route?.params?.eventId;
   const eventNameParam = route?.params?.eventName;
@@ -228,6 +252,9 @@ export default function EventMonitoringScreen({ route }) {
   const [refreshing, setRefreshing] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [updatedAt, setUpdatedAt] = useState(null);
+  // Check-ins being saved: member id -> true/false (wins over a poll that
+  // arrives before the save finishes)
+  const pendingCheckins = useRef({});
 
   const mapRef = useRef(null);
   const fittedOnce = useRef(false);
@@ -279,7 +306,13 @@ export default function EventMonitoringScreen({ route }) {
           (a, b) => severity(a) - severity(b) || a.name.localeCompare(b.name)
         );
 
-        setDogs(items);
+        setDogs(
+          items.map((it) =>
+            it.id in pendingCheckins.current
+              ? { ...it, checkedIn: pendingCheckins.current[it.id] }
+              : it
+          )
+        );
         setErrorText('');
         setUpdatedAt(Date.now());
       } catch (e) {
@@ -353,14 +386,33 @@ export default function EventMonitoringScreen({ route }) {
     }, 350);
   };
 
+  // ---- Check-in -----------------------------------------------------------
+  const toggleCheckIn = async (item) => {
+    const next = !item.checkedIn;
+    pendingCheckins.current[item.id] = next;
+    setDogs((prev) => prev.map((d) => (d.id === item.id ? { ...d, checkedIn: next } : d)));
+
+    const { error } = await supabase.rpc('set_event_checkin', {
+      p_member_id: item.id,
+      p_checked_in: next,
+    });
+
+    delete pendingCheckins.current[item.id];
+    if (error) {
+      setDogs((prev) => prev.map((d) => (d.id === item.id ? { ...d, checkedIn: !next } : d)));
+      Alert.alert('Check-in not saved', error.message);
+    }
+  };
+
   // ---- Summary ----------------------------------------------------------
   const online = dogs.filter((d) => d.deviceStatus === 'ONLINE').length;
+  const checkedIn = dogs.filter((d) => d.checkedIn).length;
   const high = dogs.filter((d) => d.healthRisk === 'HIGH').length;
   const moderate = dogs.filter((d) => d.healthRisk === 'MODERATE').length;
 
   // ---- Renderers --------------------------------------------------------
   const renderDog = ({ item }) => {
-    const { tone, label } = getCardStyle(item.deviceStatus, item.healthRisk);
+    const { tone, label } = getCardStyle(item.deviceStatus, item.healthRisk, item.riskReason);
     const isOnline = item.deviceStatus === 'ONLINE';
     const subtitle = [item.ownerName, item.breed].filter(Boolean).join('  ·  ');
 
@@ -409,6 +461,20 @@ export default function EventMonitoringScreen({ route }) {
             <Text style={[styles.noGps, { color: tone.sub }]}>No GPS yet</Text>
           )}
         </View>
+
+        {/* Arrived at the venue? */}
+        <TouchableOpacity
+          style={[styles.checkInButton, item.checkedIn && styles.checkInDone]}
+          activeOpacity={0.85}
+          onPress={() => toggleCheckIn(item)}
+          accessibilityRole="button"
+          accessibilityState={{ checked: item.checkedIn }}
+          accessibilityLabel={item.checkedIn ? `${item.name} is checked in. Tap to undo` : `Check in ${item.name}`}
+        >
+          <Text style={[styles.checkInText, item.checkedIn && { color: tone.text }]}>
+            {item.checkedIn ? 'Checked in' : 'Check in'}
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   };
@@ -430,7 +496,11 @@ export default function EventMonitoringScreen({ route }) {
         <View style={styles.heading}>
           <Text style={styles.title} numberOfLines={1}>{title}</Text>
         </View>
-        <PhaseNotice phase={phase} event={event} />
+        <PhaseNotice
+          phase={phase}
+          event={event}
+          onReport={() => navigation.navigate('EventReport', { eventId, eventName: title })}
+        />
       </View>
     );
   }
@@ -452,7 +522,7 @@ export default function EventMonitoringScreen({ route }) {
         </View>
 
         <Text style={styles.headingSub}>
-          {dogs.length} dog{dogs.length === 1 ? '' : 's'}  ·  {online} online
+          {checkedIn}/{dogs.length} checked in  ·  {online} online
           {high > 0 ? `  ·  ${high} high risk` : ''}
           {moderate > 0 ? `  ·  ${moderate} moderate` : ''}
         </Text>
@@ -568,7 +638,8 @@ export default function EventMonitoringScreen({ route }) {
               (() => {
                 const { tone, label } = getCardStyle(
                   selected.deviceStatus,
-                  selected.healthRisk
+                  selected.healthRisk,
+                  selected.riskReason
                 );
                 return (
                   <>
@@ -791,6 +862,26 @@ const styles = StyleSheet.create({
   },
   tileUnit: { fontFamily: fonts.regular, fontSize: 13, color: colors.tileLabel },
 
+  reportButton: {
+    height: 52,
+    borderRadius: 26,
+    paddingHorizontal: 28,
+    marginTop: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+  },
+  reportButtonText: { fontFamily: fonts.medium, fontSize: 15, color: colors.onAccent },
+  checkInButton: {
+    height: 46,
+    borderRadius: 23,
+    marginTop: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.accent,
+  },
+  checkInDone: { backgroundColor: 'rgba(255,255,255,0.6)' },
+  checkInText: { fontFamily: fonts.medium, fontSize: 15, color: colors.onAccent },
   cardBottom: {
     flexDirection: 'row',
     justifyContent: 'space-between',

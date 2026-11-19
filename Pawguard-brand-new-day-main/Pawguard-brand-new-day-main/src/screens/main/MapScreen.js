@@ -8,6 +8,7 @@ import {
 } from 'react-native';
 
 import MapView, { Marker } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../components/Icon';
 import Glass from '../../components/Glass';
 
@@ -16,6 +17,7 @@ import { colors, fonts, tones } from '../../Theme';
 
 export default function MapScreen({ route }) {
   const dog = route?.params?.dog;
+  const insets = useSafeAreaInsets();
 
   const [sensor, setSensor] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -162,7 +164,7 @@ export default function MapScreen({ route }) {
       </MapView>
 
       {/* Bottom pastel panel */}
-      <Glass radius={30} intensity={60} style={styles.infoPanel}>
+      <Glass radius={30} intensity={60} style={StyleSheet.flatten([styles.infoPanel, { bottom: 20 + insets.bottom }])}>
         <View style={styles.panelTop}>
           <Text style={[styles.updated, { color: tone.sub }]} numberOfLines={1}>
             {sensor.timestamp_utc
@@ -248,7 +250,7 @@ const styles = StyleSheet.create({
 
   infoPanel: {
     position: 'absolute',
-    bottom: 104, // sits above the floating tab bar
+    bottom: 20, // + safe area (set inline); no tab bar on this screen any more
     left: 20,
     right: 20,
     borderRadius: 30,

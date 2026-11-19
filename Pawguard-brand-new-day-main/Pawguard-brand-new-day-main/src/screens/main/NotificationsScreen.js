@@ -17,12 +17,16 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
+import { refreshUnreadCount } from '../../utils/useUnreadCount';
 
 // Notification type -> pastel tone + icon. Unknown types fall back to brand.
 const TYPE_STYLE = {
   HIGH_RISK: { tone: 'salmon', icon: 'warning', label: 'High risk' },
   MODERATE_RISK: { tone: 'amber', icon: 'alert-circle', label: 'Moderate risk' },
   DEVICE_OFFLINE: { tone: 'beige', icon: 'cloud-offline', label: 'Device offline' },
+  // Organizer alerts (dogs in an event that is running)
+  EVENT_HIGH_RISK: { tone: 'salmon', icon: 'warning', label: 'Event · High risk' },
+  EVENT_DEVICE_OFFLINE: { tone: 'beige', icon: 'cloud-offline', label: 'Event · Collar offline' },
 };
 const DEFAULT_STYLE = { tone: 'brand', icon: 'notifications', label: 'PawGuard' };
 
@@ -91,6 +95,7 @@ export default function NotificationsScreen() {
     );
 
     await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+    refreshUnreadCount();
   }
 
   async function markAllAsRead() {
@@ -106,6 +111,7 @@ export default function NotificationsScreen() {
       Alert.alert('Could not update', error.message);
       loadNotifications();
     }
+    refreshUnreadCount();
   }
 
   async function deleteNotification(id) {
@@ -118,6 +124,7 @@ export default function NotificationsScreen() {
       Alert.alert('Could not delete', error.message);
       loadNotifications(); // restore the real list
     }
+    refreshUnreadCount();
   }
 
   function confirmClearAll() {
@@ -143,6 +150,7 @@ export default function NotificationsScreen() {
       Alert.alert('Could not clear', error.message);
       loadNotifications();
     }
+    refreshUnreadCount();
   }
 
   // Silent refresh on focus (spinner only on the very first load)

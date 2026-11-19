@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 
+import CallVetButton from '../../components/CallVetButton';
 import Icon from '../../components/Icon';
 
 import { supabase } from '../../config/supabase';
@@ -320,6 +321,20 @@ export default function DogProfileScreen({ route, navigation }) {
         </>
       )}
 
+      {/* Vet */}
+      <Text style={styles.sectionTitle}>Veterinarian</Text>
+      {dog.vet_phone ? (
+        <>
+          <InfoRow label="Vet" value={dog.vet_name || 'Not named'} />
+          <InfoRow label="Phone" value={dog.vet_phone} last />
+        </>
+      ) : (
+        <Text style={styles.emptyText}>
+          Add {dog.name}'s vet so you can call them in one tap during an emergency.
+        </Text>
+      )}
+      <CallVetButton dog={dog} navigation={navigation} style={styles.vetButton} />
+
       {/* Actions */}
       <TouchableOpacity
         style={styles.primaryButton}
@@ -344,6 +359,7 @@ export default function DogProfileScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
+  vetButton: { marginTop: 14 },
   container: { flex: 1, backgroundColor: colors.white },
   content: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 40 },
   center: {

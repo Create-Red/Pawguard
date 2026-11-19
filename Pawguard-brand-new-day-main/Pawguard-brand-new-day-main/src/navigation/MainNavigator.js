@@ -5,6 +5,8 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import CustomTabBar from '../components/CustomTabBar';
 import { stackScreenOptions, tabScreenOptions } from './navOptions';
+import { useAuth } from '../context/AuthContext';
+import useUnreadCount from '../utils/useUnreadCount';
 
 import DashboardScreen from '../screens/main/DashboardScreen';
 import HistoryScreen from '../screens/main/HistoryScreen';
@@ -23,6 +25,9 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function MainTabs() {
+  const { profile } = useAuth();
+  const unread = useUnreadCount(profile?.id);
+
   return (
     <Tab.Navigator
       // Floating glass tab bar (shared with the organizer side)
@@ -48,9 +53,13 @@ function MainTabs() {
       />
 
       <Tab.Screen
-        name="Map"
-        component={MapScreen}
-        options={{ title: 'Map', tabBarIconName: 'map' }}
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{
+          title: 'Alerts',
+          tabBarIconName: 'notifications',
+          tabBarBadge: unread > 0 ? unread : undefined,
+        }}
       />
 
       <Tab.Screen
@@ -89,6 +98,13 @@ export default function MainNavigator() {
         options={{ title: 'Pet Profile' }}
       />
 
+      {/* Opened from Home ("View location") and the pet profile */}
+      <Stack.Screen
+        name="Map"
+        component={MapScreen}
+        options={{ title: 'Location' }}
+      />
+
       <Stack.Screen
         name="PairDevice"
         component={PairDeviceScreen}
@@ -99,12 +115,6 @@ export default function MainNavigator() {
         name="TransferDevice"
         component={TransferDeviceScreen}
         options={{ title: 'Transfer Device' }}
-      />
-
-      <Stack.Screen
-        name="Notifications"
-        component={NotificationsScreen}
-        options={{ title: 'Notifications' }}
       />
 
       <Stack.Screen

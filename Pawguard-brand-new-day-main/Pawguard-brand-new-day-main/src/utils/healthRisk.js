@@ -172,3 +172,33 @@ export function calculateHealthRisk(sensor, tier) {
   // NORMAL
   return 'LOW';
 }
+
+// Why is the dog at risk? Returns e.g. ['too hot', 'too humid'], or [] if fine.
+// Uses the same limits as calculateHealthRisk.
+export function getRiskReasons(sensor, tier) {
+  const level = calculateHealthRisk(sensor, tier);
+  if (level !== 'HIGH' && level !== 'MODERATE') return [];
+
+  const surfaceTemp = Number(sensor.surface_temp);
+  const humidity = Number(sensor.humidity);
+  const t = activeThresholds[
+    cleanTier(tier || sensor.risk_tier || (sensor.dog_id ? getDogTier(sensor.dog_id) : 'normal'))
+  ];
+
+  const high = level === 'HIGH';
+  const reasons = [];
+  if (surfaceTemp >= (high ? t.high_surface_temp : t.moderate_surface_temp)) reasons.push('too hot');
+  if (surfaceTemp <= (high ? t.low_surface_temp_high : t.low_surface_temp_moderate)) reasons.push('too cold');
+  if (humidity >= (high ? t.high_humidity : t.moderate_humidity)) reasons.push('too humid');
+  if (humidity <= (high ? t.low_humidity_high : t.low_humidity_moderate)) reasons.push('too dry');
+  return reasons;
+}
+
+// ['too hot', 'too humid'] -> "Too hot & humid" (short, for status pills)
+export function formatRiskReasons(reasons) {
+  if (!reasons || reasons.length === 0) return '';
+  return reasons
+    .map((r, i) => (i === 0 ? r : r.replace('too ', '')))
+    .join(' & ')
+    .replace(/^t/, 'T');
+}

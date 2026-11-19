@@ -298,7 +298,22 @@ export default function ManageEventsScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
 
-        {/* Participant management button */}
+        {/* Ended: the report. Otherwise: participants */}
+        {(displayStatus === 'ended' || displayStatus === 'completed') ? (
+        <TouchableOpacity
+          activeOpacity={0.85}
+          style={styles.manageParticipantsButton}
+          disabled={busy}
+          onPress={() =>
+            navigation.navigate('EventReport', {
+              eventId: item.id,
+              eventName: item.name,
+            })
+          }
+        >
+          <Text style={styles.manageParticipantsText}>View report</Text>
+        </TouchableOpacity>
+        ) : (
         <TouchableOpacity
           activeOpacity={0.85}
           style={styles.manageParticipantsButton}
@@ -320,6 +335,7 @@ export default function ManageEventsScreen({ navigation }) {
             </View>
           )}
         </TouchableOpacity>
+        )}
       </View>
     );
   };
@@ -419,8 +435,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
 
-  list: { paddingHorizontal: 20, paddingBottom: 40 },
-  emptyList: { flexGrow: 1, justifyContent: 'center', padding: 24 },
+  list: { paddingHorizontal: 20, paddingBottom: 120 }, // room for the floating tab bar
+  emptyList: { flexGrow: 1, justifyContent: 'center', padding: 24, paddingBottom: 120 },
 
   // Pastel event card
   card: {

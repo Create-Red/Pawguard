@@ -22,7 +22,8 @@
       "expo-status-bar",
       "expo-notifications",
       "@react-native-community/datetimepicker",
-      "expo-font"
+      "expo-font",
+      "expo-sharing"
     ],
     "extra": {
       "eas": {

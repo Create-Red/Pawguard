@@ -18,8 +18,16 @@ import {
 
 import { useFocusEffect } from '@react-navigation/native';
 
+import CallVetButton from '../../components/CallVetButton';
 import Icon from '../../components/Icon';
-import { calculateHealthRisk, loadAlertThresholds } from '../../utils/healthRisk';
+import WalkSafetyCard from '../../components/WalkSafetyCard';
+import {
+  calculateHealthRisk,
+  formatRiskReasons,
+  getDogTier,
+  getRiskReasons,
+  loadAlertThresholds,
+} from '../../utils/healthRisk';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
@@ -27,7 +35,6 @@ import { registerForPushNotifications } from '../../utils/registerForPush';
 import { getSelectedDogId, setSelectedDogId } from '../../utils/selectedDog';
 
 const OFFLINE_AFTER_MS = 2 * 60 * 1000;
-const UNREAD_REFRESH_MS = 15 * 1000;
 const EVENTS_REFRESH_MS = 30 * 1000; // fallback in case realtime is off
 
 const toMillis = (ts) => {
@@ -66,7 +73,7 @@ const fetchApprovedEvents = async (dogId) => {
 
     const { data: evs, error: evError } = await supabase
       .from('events')
-      .select('id, name, venue, starts_at, ends_at')
+      .select('id, name, venue, starts_at, ends_at, status')
       .in('id', ids)
       .order('starts_at', { ascending: true });
 
@@ -75,6 +82,7 @@ const fetchApprovedEvents = async (dogId) => {
     // Keep an event unless we know for sure it has ended.
     // (A missing ends_at used to count as "ended in 1970" and hide it.)
     return (evs || []).filter((e) => {
+      if (e.status === 'cancelled') return false;
       const end = new Date(e.ends_at || e.starts_at).getTime();
       return Number.isNaN(end) || end >= Date.now();
     });
@@ -112,6 +120,7 @@ export default function DashboardScreen({ navigation }) {
   const [selectedDog, setSelectedDog] = useState(null);
   const [sensor, setSensor] = useState(null);
   const [device, setDevice] = useState(null);
+  const [gps, setGps] = useState(null); // last known location, for local weather
   const [approvedEvents, setApprovedEvents] = useState([]); // upcoming, approved for this pet
 
   // Three separate loading states instead of one:
@@ -120,7 +129,6 @@ export default function DashboardScreen({ navigation }) {
   const [dogLoading, setDogLoading] = useState(false);        // switching to another pet
 
   const [now, setNow] = useState(Date.now());
-  const [unreadCount, setUnreadCount] = useState(0);
 
   const selectedDogRef = useRef(null); // id of the pet currently on screen
   const dogRequest = useRef(0);        // ignores slow, outdated responses
@@ -136,6 +144,8 @@ export default function DashboardScreen({ navigation }) {
   else if (!isOnline) status = 'Offline';
 
   const riskLevel = isOnline ? calculateHealthRisk(sensor) : 'UNKNOWN';
+  // e.g. "Too hot", "Too hot & humid"
+  const reasonText = isOnline ? formatRiskReasons(getRiskReasons(sensor)) : '';
 
   // Card colour + pill text follow the pet's state
   let tone = tones.beige;
@@ -145,10 +155,10 @@ export default function DashboardScreen({ navigation }) {
   } else if (isOnline) {
     if (riskLevel === 'HIGH') {
       tone = tones.salmon;
-      pillText = 'High risk';
+      pillText = reasonText ? `High · ${reasonText}` : 'High risk';
     } else if (riskLevel === 'MODERATE') {
       tone = tones.amber;
-      pillText = 'Moderate risk';
+      pillText = reasonText ? `Moderate · ${reasonText}` : 'Moderate risk';
     } else {
       tone = tones.green;
       pillText = 'Low risk';
@@ -164,26 +174,6 @@ export default function DashboardScreen({ navigation }) {
     return () => clearInterval(timer);
   }, []);
 
-  // ---- Unread notification count (bell badge) -------------------------
-  const fetchUnreadCount = async () => {
-    if (!profile?.id) return;
-
-    const { count, error } = await supabase
-      .from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', profile.id)
-      .eq('is_read', false);
-
-    if (!error) setUnreadCount(count || 0);
-  };
-
-  useEffect(() => {
-    if (!profile?.id) return;
-    fetchUnreadCount();
-    const timer = setInterval(fetchUnreadCount, UNREAD_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [profile?.id]);
-
   // ---- Data loading --------------------------------------------------
   // clear = true only when switching to a DIFFERENT pet (its data must not
   // show the previous pet's values). A normal refresh keeps what is on screen
@@ -195,6 +185,7 @@ export default function DashboardScreen({ navigation }) {
     if (clear) {
       setDevice(null);
       setSensor(null);
+      setGps(null);
       setApprovedEvents([]);
       setDogLoading(true);
     }
@@ -209,19 +200,39 @@ export default function DashboardScreen({ navigation }) {
       if (isStale()) return;
 
       let sensorData = null;
+      let gpsData = null;
 
       // Readings belong to the DOG (a device can move between dogs)
       if (deviceData) {
-        const { data } = await supabase
-          .from('sensor_data')
-          .select('*')
-          .eq('dog_id', dog.id)
-          .order('timestamp_utc', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+        const [latest, lastGps] = await Promise.all([
+          supabase
+            .from('sensor_data')
+            .select('*')
+            .eq('dog_id', dog.id)
+            .order('timestamp_utc', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+          // Last real GPS fix, for "Safe to walk?" weather when the collar is off
+          supabase
+            .from('sensor_data')
+            .select('latitude, longitude')
+            .eq('dog_id', dog.id)
+            .not('latitude', 'is', null)
+            .not('longitude', 'is', null)
+            .neq('latitude', 0)
+            .order('timestamp_utc', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        ]);
 
         if (isStale()) return;
-        sensorData = data;
+        sensorData = latest.data;
+        if (lastGps.data) {
+          gpsData = {
+            latitude: Number(lastGps.data.latitude),
+            longitude: Number(lastGps.data.longitude),
+          };
+        }
       }
 
       // A failure here must never break the rest of the dashboard.
@@ -233,6 +244,7 @@ export default function DashboardScreen({ navigation }) {
       // (device present but sensor still empty = brief "Offline" flash).
       setDevice(deviceData);
       setSensor(sensorData);
+      setGps(gpsData);
       if (eventRows !== null) setApprovedEvents(eventRows);
     } finally {
       if (!isStale()) setDogLoading(false);
@@ -312,9 +324,9 @@ export default function DashboardScreen({ navigation }) {
           if (selectedDogRef.current !== dogId) return;
           setSensor(payload.new);
           setNow(Date.now());
-          // The server may have just made an alert for this reading
-          if (payload.new?.risk_level === 'HIGH' || payload.new?.risk_level === 'MODERATE') {
-            setTimeout(fetchUnreadCount, 1500);
+          const { latitude, longitude } = payload.new || {};
+          if (latitude != null && longitude != null && Number(latitude) !== 0) {
+            setGps({ latitude: Number(latitude), longitude: Number(longitude) });
           }
         }
       )
@@ -362,7 +374,7 @@ export default function DashboardScreen({ navigation }) {
   // ---- Health alerts -------------------------------------------------
   // Alerts are now created by Supabase itself for every reading
   // (supabase_server_risk_check.sql), even when this app is closed.
-  // The app only shows the risk and refreshes the bell badge.
+  // The app only shows the risk; alerts are in the Alerts tab.
 
   // ---- Device offline notification -----------------------------------
   // Also done by Supabase now (supabase_offline_check.sql): a check every
@@ -375,7 +387,6 @@ export default function DashboardScreen({ navigation }) {
         const refreshDashboard = async () => {
           await loadAlertThresholds(supabase);
           await loadDashboard();
-          fetchUnreadCount();
         };
 
         refreshDashboard();
@@ -424,39 +435,15 @@ export default function DashboardScreen({ navigation }) {
           refreshing={refreshing}
           tintColor={colors.ink}
           colors={[colors.ink]}
-          onRefresh={() => {
-            loadDashboard({ pull: true });
-            fetchUnreadCount();
-          }}
+          onRefresh={() => loadDashboard({ pull: true })}
         />
       }
     >
-      {/* Header: brand left, icon pill right */}
+      {/* Header: brand */}
       <View style={styles.topHeader}>
         <View style={styles.brand}>
           <Text style={styles.brandText}>PawGuard</Text>
           <View style={styles.brandDot} />
-        </View>
-
-        <View style={styles.iconPill}>
-          <TouchableOpacity
-            style={styles.iconButton}
-            onPress={() => navigation.navigate('Notifications')}
-            accessibilityLabel={
-              unreadCount > 0
-                ? `Open notifications, ${unreadCount} unread`
-                : 'Open notifications'
-            }
-          >
-            <Icon name="notifications" size={18} color={colors.ink} />
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </Text>
-              </View>
-            )}
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -562,6 +549,16 @@ export default function DashboardScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
+      {/* At risk: one tap to the vet */}
+      {selectedDog && !dogLoading && (riskLevel === 'HIGH' || riskLevel === 'MODERATE') && (
+        <CallVetButton
+          dog={selectedDog}
+          navigation={navigation}
+          tone={riskLevel === 'HIGH' ? tones.salmon : tones.amber}
+          style={styles.vetButton}
+        />
+      )}
+
       {/* Readings (like "Event Details" + Time/Venue tiles) */}
       <Text style={styles.sectionTitle}>
         {dogLoading
@@ -576,6 +573,17 @@ export default function DashboardScreen({ navigation }) {
         <InfoTile label="Ambient" value={sensor?.ambient_temp} unit="°C" />
         <InfoTile label="Humidity" value={sensor?.humidity} unit="%" />
       </View>
+
+      {/* Safe to walk? (collar air reading, or local weather) */}
+      {selectedDog && !dogLoading && isPaired && (
+        <WalkSafetyCard
+          dogName={selectedDog.name}
+          tier={getDogTier(selectedDog.id)}
+          sensor={sensor}
+          collarOnline={isOnline}
+          gps={gps}
+        />
+      )}
 
       {/* One primary action, like "Register" */}
       {selectedDog && (
@@ -621,6 +629,12 @@ export default function DashboardScreen({ navigation }) {
         approvedEvents.slice(0, 3).map((event, index, list) => {
           const date = new Date(event.starts_at);
           const valid = !Number.isNaN(date.getTime());
+          const endMs = new Date(event.ends_at).getTime();
+          // Started and not yet ended (no end time = ongoing once started)
+          const ongoing =
+            valid &&
+            now >= date.getTime() &&
+            (Number.isNaN(endMs) || now <= endMs);
 
           return (
             <TouchableOpacity
@@ -632,9 +646,11 @@ export default function DashboardScreen({ navigation }) {
               activeOpacity={0.7}
               onPress={() => navigation.navigate('Events')}
             >
-              <View style={styles.dateBadge}>
-                <Text style={styles.dateDay}>{valid ? date.getDate() : '--'}</Text>
-                <Text style={styles.dateMonth}>
+              <View style={[styles.dateBadge, ongoing && { backgroundColor: tones.green.bg }]}>
+                <Text style={[styles.dateDay, ongoing && { color: tones.green.text }]}>
+                  {valid ? date.getDate() : '--'}
+                </Text>
+                <Text style={[styles.dateMonth, ongoing && { color: tones.green.pillText }]}>
                   {valid
                     ? date.toLocaleDateString([], { month: 'short' }).toUpperCase()
                     : ''}
@@ -650,7 +666,14 @@ export default function DashboardScreen({ navigation }) {
                 </Text>
               </View>
 
-              <Icon name="chevron-forward" size={18} color={colors.muted} />
+              {ongoing ? (
+                <View style={styles.ongoingPill}>
+                  <View style={styles.ongoingDot} />
+                  <Text style={styles.ongoingText}>Ongoing</Text>
+                </View>
+              ) : (
+                <Icon name="chevron-forward" size={18} color={colors.muted} />
+              )}
             </TouchableOpacity>
           );
         })
@@ -660,6 +683,18 @@ export default function DashboardScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
+  ongoingPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: tones.green.pill,
+  },
+  ongoingDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: tones.green.pillText },
+  ongoingText: { fontFamily: fonts.medium, fontSize: 11, color: tones.green.pillText },
+  vetButton: { marginTop: 12 },
   container: {
     flex: 1,
     backgroundColor: colors.white,
@@ -681,6 +716,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    minHeight: 40, // same height as before the bell was removed
     marginTop: 8,
   },
   brand: {
@@ -700,40 +736,6 @@ const styles = StyleSheet.create({
     marginLeft: 3,
     marginBottom: 7,
   },
-  iconPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 40,
-    paddingHorizontal: 6,
-    borderRadius: 20,
-    backgroundColor: colors.pill,
-  },
-  iconButton: {
-    width: 34,
-    height: 34,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  badge: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    minWidth: 16,
-    height: 16,
-    paddingHorizontal: 3,
-    borderRadius: 8,
-    backgroundColor: colors.danger,
-    borderWidth: 1.5,
-    borderColor: colors.pill,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  badgeText: {
-    color: colors.white,
-    fontSize: 9,
-    fontFamily: fonts.bold,
-  },
-
   title: {
     fontFamily: fonts.medium,
     fontSize: 28,

@@ -52,13 +52,30 @@ export default function UserManagementScreen() {
   const loadUsers = async ({ pull = false } = {}) => {
     if (pull) setRefreshing(true);
 
-    const { data, error } = await supabase.rpc('admin_list_users');
+    const [{ data, error }, avatars] = await Promise.all([
+      supabase.rpc('admin_list_users'),
+      // Profile pictures (admin_list_users does not return them)
+      supabase.rpc('admin_user_avatars'),
+    ]);
 
     if (error) {
       console.error('User management error:', error);
       Alert.alert('Unable to load users', error.message);
     } else {
-      setUsers(data || []);
+      const byId = {};
+      if (avatars.error) {
+        console.log('AVATARS ERROR:', avatars.error.message);
+      } else {
+        (avatars.data || []).forEach((a) => {
+          byId[a.id] = a.avatar_url;
+        });
+      }
+      setUsers(
+        (data || []).map((u) => ({
+          ...u,
+          avatar_url: u.avatar_url || byId[u.id] || null,
+        }))
+      );
     }
 
     setLoading(false);

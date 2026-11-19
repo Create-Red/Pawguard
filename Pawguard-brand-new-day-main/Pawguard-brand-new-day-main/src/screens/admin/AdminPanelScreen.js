@@ -14,6 +14,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 
 import Avatar from '../../components/Avatar';
+import { RiskPill } from '../../components/BreedPicker';
 import Icon from '../../components/Icon';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
@@ -58,6 +59,58 @@ const MODULES = [
   },
 ];
 
+const REASON_WORD = {
+  'too hot': 'Too hot',
+  'too humid': 'Too humid',
+  'too cold': 'Too cold',
+  'too dry': 'Too dry',
+};
+
+// Alerts per day: small stacked bars (red = High on top of amber = Moderate)
+function AlertBars({ days }) {
+  const max = Math.max(1, ...days.map((d) => Number(d.high) + Number(d.moderate)));
+  return (
+    <View>
+      <View style={styles.dayBars}>
+        {days.map((d) => {
+          const hi = Number(d.high) || 0;
+          const mo = Number(d.moderate) || 0;
+          const total = hi + mo;
+          return (
+            <View key={d.day} style={styles.dayCol}>
+              <Text style={styles.dayCount}>{total || ''}</Text>
+              <View style={styles.dayTrack}>
+                {total === 0 ? (
+                  <View style={styles.dayZero} />
+                ) : (
+                  <>
+                    <View style={{ height: (hi / max) * 90, backgroundColor: colors.danger, borderTopLeftRadius: 5, borderTopRightRadius: 5 }} />
+                    <View
+                      style={{
+                        height: (mo / max) * 90,
+                        backgroundColor: tones.amber.pillText,
+                        borderTopLeftRadius: hi ? 0 : 5,
+                        borderTopRightRadius: hi ? 0 : 5,
+                      }}
+                    />
+                  </>
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+      <View style={styles.dayLabels}>
+        {days.map((d) => (
+          <Text key={d.day} style={styles.dayLabel}>
+            {new Date(`${d.day}T12:00:00`).toLocaleDateString([], { weekday: 'short' }).slice(0, 2)}
+          </Text>
+        ))}
+      </View>
+    </View>
+  );
+}
+
 function StatTile({ label, value, loading }) {
   return (
     <View style={styles.tile}>
@@ -72,6 +125,7 @@ export default function AdminPanelScreen({ navigation }) {
 
   const [dogs, setDogs] = useState([]);
   const [stats, setStats] = useState({ users: 0, dogs: 0, devices: 0 });
+  const [overview, setOverview] = useState(null); // admin_overview()
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -79,7 +133,7 @@ export default function AdminPanelScreen({ navigation }) {
     if (pull) setRefreshing(true);
 
     try {
-      const [usersResult, dogsResult, devicesResult, dogListResult] =
+      const [usersResult, dogsResult, devicesResult, dogListResult, overviewResult] =
         await Promise.all([
           supabase.from('profiles').select('*', { count: 'exact', head: true }),
           supabase.from('dogs').select('*', { count: 'exact', head: true }),
@@ -94,7 +148,14 @@ export default function AdminPanelScreen({ navigation }) {
             `)
             .order('created_at', { ascending: false })
             .limit(20),
+          supabase.rpc('admin_overview'),
         ]);
+
+      if (overviewResult.error) {
+        console.log('ADMIN OVERVIEW ERROR:', overviewResult.error.message);
+      } else {
+        setOverview(overviewResult.data);
+      }
 
       const errors = [
         usersResult.error,
@@ -178,6 +239,104 @@ export default function AdminPanelScreen({ navigation }) {
         <StatTile label="Pets" value={stats.dogs} loading={loading} />
         <StatTile label="Devices" value={stats.devices} loading={loading} />
       </View>
+
+      {overview && (() => {
+        const c = overview.counts || {};
+        const a = overview.alerts || {};
+        const ev = overview.events || {};
+        const days = overview.by_day || [];
+        const breeds = overview.top_breeds || [];
+        const reasons = Object.entries(overview.reasons || {}).sort((x, y) => y[1] - x[1]);
+        const diff = Number(a.week || 0) - Number(a.last_week || 0);
+        const topBreed = Math.max(1, ...breeds.map((b) => Number(b.alerts)));
+        return (
+          <>
+            {/* This week */}
+            <Text style={styles.sectionTitle}>This week</Text>
+            <View style={styles.tiles}>
+              <View style={[styles.bigTile, { backgroundColor: Number(a.high) > 0 ? tones.salmon.bg : tones.green.bg }]}>
+                <Text style={styles.bigLabel}>Alerts</Text>
+                <Text style={styles.bigValue}>{a.week ?? 0}</Text>
+                <Text style={styles.bigSub}>
+                  {a.high ?? 0} high · {a.moderate ?? 0} moderate
+                </Text>
+                <Text style={styles.bigSub}>
+                  {diff === 0 ? 'Same as last week' : `${diff > 0 ? '▲' : '▼'} ${Math.abs(diff)} vs last week`}
+                </Text>
+              </View>
+              <View style={[styles.bigTile, { backgroundColor: tones.brand.bg }]}>
+                <Text style={styles.bigLabel}>Active collars</Text>
+                <Text style={styles.bigValue}>{c.active_week ?? 0}</Text>
+                <Text style={styles.bigSub}>{c.sending_now ?? 0} sending now</Text>
+                <Text style={styles.bigSub}>{c.paired ?? 0} of {c.collars ?? 0} paired</Text>
+              </View>
+            </View>
+
+            <View style={styles.eventLine}>
+              <Text style={styles.eventText}>
+                <Text style={styles.eventStrong}>{ev.live ?? 0}</Text> live now  ·{' '}
+                <Text style={styles.eventStrong}>{ev.upcoming ?? 0}</Text> upcoming  ·{' '}
+                <Text style={styles.eventStrong}>{ev.ended_week ?? 0}</Text> ended this week
+              </Text>
+            </View>
+
+            {/* Alerts per day */}
+            {days.length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Alerts per day</Text>
+                <AlertBars days={days} />
+              </>
+            )}
+
+            {/* Breeds */}
+            <Text style={styles.sectionTitle}>Breeds with the most alerts</Text>
+            <Text style={styles.sectionHint}>Last 30 days</Text>
+            {breeds.length === 0 ? (
+              <Text style={styles.emptyText}>No alerts in the last 30 days.</Text>
+            ) : (
+              breeds.map((b) => (
+                <View key={b.breed} style={styles.breedRow}>
+                  <View style={styles.breedTop}>
+                    <Text style={styles.breedName} numberOfLines={1}>{b.breed}</Text>
+                    <RiskPill tier={b.risk_tier} small />
+                    <Text style={styles.breedCount}>{b.alerts}</Text>
+                  </View>
+                  <View style={styles.breedTrack}>
+                    <View
+                      style={[
+                        styles.breedBar,
+                        {
+                          width: `${(Number(b.alerts) / topBreed) * 100}%`,
+                          backgroundColor: Number(b.high) > 0 ? colors.danger : tones.amber.pillText,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={styles.breedSub}>
+                    {b.dogs} dog{Number(b.dogs) === 1 ? '' : 's'} · {b.high} high
+                  </Text>
+                </View>
+              ))
+            )}
+
+            {/* Reasons */}
+            {reasons.length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Why alerts happened</Text>
+                <View style={styles.reasonRow}>
+                  {reasons.map(([r, n]) => (
+                    <View key={r} style={styles.reasonChip}>
+                      <Text style={styles.reasonText}>
+                        {REASON_WORD[r] || r} <Text style={styles.reasonStrong}>{n}</Text>
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </>
+            )}
+          </>
+        );
+      })()}
 
       {/* Admin tools */}
       <Text style={styles.sectionTitle}>Tools</Text>
@@ -317,6 +476,37 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     paddingHorizontal: 2,
   },
+
+  // Overview
+  sectionHint: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: -8, marginBottom: 10, paddingHorizontal: 2 },
+  bigTile: { flex: 1, borderRadius: 22, paddingVertical: 14, paddingHorizontal: 16 },
+  bigLabel: { fontFamily: fonts.regular, fontSize: 12, letterSpacing: 0.4, color: colors.ink, opacity: 0.7 },
+  bigValue: { fontFamily: fonts.medium, fontSize: 30, color: colors.ink, marginTop: 2 },
+  bigSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.ink, opacity: 0.7, marginTop: 2 },
+  eventLine: { marginTop: 12, paddingHorizontal: 2 },
+  eventText: { fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  eventStrong: { fontFamily: fonts.semibold, color: colors.ink },
+
+  dayBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, height: 112 },
+  dayCol: { flex: 1, alignItems: 'stretch' },
+  dayCount: { fontFamily: fonts.medium, fontSize: 11, color: colors.muted, textAlign: 'center', marginBottom: 4 },
+  dayTrack: { justifyContent: 'flex-end' },
+  dayZero: { height: 3, borderRadius: 2, backgroundColor: colors.line },
+  dayLabels: { flexDirection: 'row', gap: 8, marginTop: 6 },
+  dayLabel: { flex: 1, fontFamily: fonts.regular, fontSize: 11, color: colors.muted, textAlign: 'center' },
+
+  breedRow: { marginBottom: 14 },
+  breedTop: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  breedName: { flex: 1, fontFamily: fonts.medium, fontSize: 15, color: colors.ink },
+  breedCount: { fontFamily: fonts.semibold, fontSize: 15, color: colors.ink, minWidth: 24, textAlign: 'right' },
+  breedTrack: { height: 8, borderRadius: 4, backgroundColor: colors.tile, marginTop: 6, overflow: 'hidden' },
+  breedBar: { height: 8, borderRadius: 4 },
+  breedSub: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, marginTop: 4 },
+
+  reasonRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  reasonChip: { paddingHorizontal: 14, height: 34, borderRadius: 17, justifyContent: 'center', backgroundColor: colors.pill },
+  reasonText: { fontFamily: fonts.regular, fontSize: 13, color: colors.ink },
+  reasonStrong: { fontFamily: fonts.semibold },
 
   // Stat tiles (same as dashboard readings)
   tiles: { flexDirection: 'row', gap: 10 },

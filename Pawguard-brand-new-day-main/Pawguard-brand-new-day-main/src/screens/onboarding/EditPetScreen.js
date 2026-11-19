@@ -46,6 +46,8 @@ export default function EditPetScreen({ route, navigation }) {
   const [breed, setBreed] = useState(''); // breed name (old free text until a breed is picked)
   const [age, setAge] = useState('');
   const [weight, setWeight] = useState('');
+  const [vetName, setVetName] = useState('');
+  const [vetPhone, setVetPhone] = useState('');
   const [photoUrl, setPhotoUrl] = useState(null);     // current saved photo
   const [newPhoto, setNewPhoto] = useState(null);     // picked, not yet uploaded
 
@@ -78,6 +80,8 @@ export default function EditPetScreen({ route, navigation }) {
           data.weight_kg !== null && data.weight_kg !== undefined
             ? String(Number(data.weight_kg))
             : '',
+        vetName: data.vet_name || '',
+        vetPhone: data.vet_phone || '',
       };
 
       setOriginal(values);
@@ -86,6 +90,8 @@ export default function EditPetScreen({ route, navigation }) {
       setBreed(values.breed);
       setAge(values.age);
       setWeight(values.weight);
+      setVetName(values.vetName);
+      setVetPhone(values.vetPhone);
       setPhotoUrl(data.photo_url || null);
     } catch (e) {
       console.log('LOAD DOG ERROR:', e);
@@ -109,6 +115,8 @@ export default function EditPetScreen({ route, navigation }) {
       breedId !== original.breedId ||
       age !== original.age ||
       weight !== original.weight ||
+      vetName !== original.vetName ||
+      vetPhone !== original.vetPhone ||
       !!newPhoto);
 
   async function pickImage() {
@@ -140,7 +148,7 @@ export default function EditPetScreen({ route, navigation }) {
     }
   }
 
-  // Same upload as Register pet. Returns the public URL.
+  // Same upload as Register pet. Returns { url, path }.
   async function uploadPhoto(asset) {
     const extension = (
       asset.fileName?.split('.').pop() ||
@@ -162,7 +170,23 @@ export default function EditPetScreen({ route, navigation }) {
     if (uploadError) throw uploadError;
 
     const { data } = supabase.storage.from('dog-photos').getPublicUrl(path);
-    return data.publicUrl;
+    return { url: data.publicUrl, path };
+  }
+
+  // ".../storage/v1/object/public/dog-photos/<user>/<file>.jpg" -> "<user>/<file>.jpg"
+  function storagePath(url) {
+    if (!url) return null;
+    const marker = '/dog-photos/';
+    const i = url.indexOf(marker);
+    if (i === -1) return null;
+    return decodeURIComponent(url.slice(i + marker.length).split('?')[0]);
+  }
+
+  // Best effort: a leftover file must never block saving
+  async function removePhoto(path) {
+    if (!path) return;
+    const { error: removeError } = await supabase.storage.from('dog-photos').remove([path]);
+    if (removeError) console.log('OLD PHOTO DELETE ERROR:', removeError.message);
   }
 
   async function updateDog() {
@@ -190,6 +214,13 @@ export default function EditPetScreen({ route, navigation }) {
       return;
     }
 
+    const phone = vetPhone.trim();
+    if (phone && !/^[0-9+()\- ]{7,20}$/.test(phone)) {
+      setError('Please enter a valid vet phone number, e.g. 0917 123 4567.');
+      setErrorField('vetPhone');
+      return;
+    }
+
     setSaving(true);
     clearError();
 
@@ -200,10 +231,14 @@ export default function EditPetScreen({ route, navigation }) {
         breed_id: breedId,
         age: age.trim() ? Number(age) : null,
         weight_kg: weightNum,
+        vet_name: vetName.trim() || null,
+        vet_phone: phone || null,
       };
 
+      let uploaded = null;
       if (newPhoto) {
-        update.photo_url = await uploadPhoto(newPhoto);
+        uploaded = await uploadPhoto(newPhoto);
+        update.photo_url = uploaded.url;
       }
 
       const { error: updateError } = await supabase
@@ -211,7 +246,20 @@ export default function EditPetScreen({ route, navigation }) {
         .update(update)
         .eq('id', dogId);
 
-      if (updateError) throw updateError;
+      if (updateError) {
+        // Saving failed: don't leave the new photo behind
+        if (uploaded) await removePhoto(uploaded.path);
+        throw updateError;
+      }
+
+      // Photo replaced: delete the old file so storage doesn't fill up.
+      // Only files in this user's own folder can be deleted.
+      if (uploaded) {
+        const oldPath = storagePath(photoUrl);
+        if (oldPath && oldPath !== uploaded.path && oldPath.startsWith(`${user.id}/`)) {
+          await removePhoto(oldPath);
+        }
+      }
 
       Alert.alert('Saved', `${update.name}'s details have been updated.`, [
         { text: 'OK', onPress: () => navigation.goBack() },
@@ -357,8 +405,7 @@ export default function EditPetScreen({ route, navigation }) {
                 }}
                 keyboardType="decimal-pad"
                 maxLength={5}
-                returnKeyType="done"
-                onSubmitEditing={updateDog}
+                returnKeyType="next"
                 editable={!saving}
                 focused={focused === 'weight'}
                 error={errorField === 'weight'}
@@ -371,6 +418,50 @@ export default function EditPetScreen({ route, navigation }) {
           <Text style={styles.hint}>
             Breed, age and weight are optional, but they help PawGuard warn you earlier
             for dogs that overheat more easily.
+          </Text>
+
+          {/* Vet: used by the "Call vet" button */}
+          <Text style={styles.groupTitle}>Veterinarian</Text>
+
+          <Field
+            label="Vet or clinic name"
+            placeholder="e.g. Dr. Cruz, Paws Clinic"
+            value={vetName}
+            onChangeText={(t) => {
+              setVetName(t);
+              clearError();
+            }}
+            autoCapitalize="words"
+            maxLength={80}
+            returnKeyType="next"
+            editable={!saving}
+            focused={focused === 'vetName'}
+            error={errorField === 'vetName'}
+            onFocus={() => setFocused('vetName')}
+            onBlur={() => setFocused(null)}
+          />
+
+          <Field
+            label="Vet phone"
+            placeholder="e.g. 0917 123 4567"
+            value={vetPhone}
+            onChangeText={(t) => {
+              setVetPhone(t.replace(/[^0-9+()\- ]/g, ''));
+              clearError();
+            }}
+            keyboardType="phone-pad"
+            maxLength={20}
+            returnKeyType="done"
+            onSubmitEditing={updateDog}
+            editable={!saving}
+            focused={focused === 'vetPhone'}
+            error={errorField === 'vetPhone'}
+            onFocus={() => setFocused('vetPhone')}
+            onBlur={() => setFocused(null)}
+          />
+
+          <Text style={styles.hint}>
+            Optional. Lets you call your vet in one tap when {name.trim() || 'your pet'} is at risk.
           </Text>
 
           {!!error && <Text style={styles.errorText}>{error}</Text>}
@@ -496,6 +587,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0,
   },
   hint: { fontFamily: fonts.regular, fontSize: 12, color: colors.muted, paddingHorizontal: 4 },
+  groupTitle: {
+    fontFamily: fonts.semibold,
+    fontSize: 16,
+    color: colors.ink,
+    marginTop: 14,
+    paddingHorizontal: 2,
+  },
   errorText: {
     fontFamily: fonts.regular,
     fontSize: 13,
