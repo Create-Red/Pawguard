@@ -45,10 +45,10 @@ const TIER_INFO = {
   },
 };
 
-// Each section: "too high" pair and "too low" pair
+// Each section: a heading, and Moderate / High fields
 const SECTIONS = [
   {
-    title: 'Surface temperature',
+    title: 'Collar surface',
     unit: '°C',
     groups: [
       {
@@ -59,14 +59,6 @@ const SECTIONS = [
           { key: 'high_surface_temp', level: 'High' },
         ],
       },
-      {
-        heading: 'Too cold',
-        hint: 'Warns at or below',
-        fields: [
-          { key: 'low_surface_temp_moderate', level: 'Moderate' },
-          { key: 'low_surface_temp_high', level: 'High' },
-        ],
-      },
     ],
   },
   {
@@ -75,18 +67,21 @@ const SECTIONS = [
     groups: [
       {
         heading: 'Too humid',
-        hint: 'Warns at or above',
-        fields: [
-          { key: 'moderate_humidity', level: 'Moderate' },
-          { key: 'high_humidity', level: 'High' },
-        ],
+        hint: 'Moderate; High if the surface is also "too hot"',
+        fields: [{ key: 'moderate_humidity', level: 'From' }],
       },
+    ],
+  },
+  {
+    title: 'Air temperature',
+    unit: '°C',
+    groups: [
       {
-        heading: 'Too dry',
-        hint: 'Warns at or below',
+        heading: 'Too cold',
+        hint: 'Air, not collar surface, at or below',
         fields: [
-          { key: 'low_humidity_moderate', level: 'Moderate' },
-          { key: 'low_humidity_high', level: 'High' },
+          { key: 'low_ambient_temp_moderate', level: 'Moderate' },
+          { key: 'low_ambient_temp_high', level: 'High' },
         ],
       },
     ],
@@ -109,20 +104,19 @@ const tierChanged = (a, b, tier) => KEYS.some((k) => a[tier][k] !== b[tier][k]);
 const checkTier = (n) => {
   if (
     n.high_surface_temp <= n.moderate_surface_temp ||
-    n.low_surface_temp_moderate <= n.low_surface_temp_high ||
-    n.high_humidity <= n.moderate_humidity ||
-    n.low_humidity_moderate <= n.low_humidity_high
+    n.low_ambient_temp_moderate <= n.low_ambient_temp_high
   ) {
-    return 'High must be stricter than moderate: higher for "too hot / humid", lower for "too cold / dry".';
+    return 'High must be stricter than moderate: higher for "too hot", lower for "too cold".';
   }
-  if (
-    n.low_surface_temp_moderate >= n.moderate_surface_temp ||
-    n.low_humidity_moderate >= n.moderate_humidity
-  ) {
-    return 'The "too low" values must be below the "too high" values.';
+  if (n.moderate_humidity < 50 || n.moderate_humidity > 89) {
+    return '"Too humid" must be between 50 and 89 %.';
   }
-  if (Object.values(n).some((v) => v < 0 || v > 100)) {
-    return 'All values must be between 0 and 100.';
+  const coldKeys = ['low_ambient_temp_moderate', 'low_ambient_temp_high'];
+  if (coldKeys.some((k) => n[k] < -30 || n[k] > 30)) {
+    return 'The "too cold" air values must be between -30 and 30 °C.';
+  }
+  if (n.moderate_surface_temp < 25 || n.high_surface_temp > 45) {
+    return 'Collar surface values must be between 25 and 45 °C.';
   }
   return '';
 };
@@ -206,8 +200,7 @@ export default function AlertConfigurationScreen() {
       if (
         riskier.moderate_surface_temp > safer.moderate_surface_temp ||
         riskier.high_surface_temp > safer.high_surface_temp ||
-        riskier.moderate_humidity > safer.moderate_humidity ||
-        riskier.high_humidity > safer.high_humidity
+        riskier.moderate_humidity > safer.moderate_humidity
       ) {
         setTier(order[i]);
         setError(
@@ -319,7 +312,12 @@ export default function AlertConfigurationScreen() {
 
                 <View style={styles.row}>
                   {group.fields.map((f) => {
-                    const tone = f.level === 'High' ? tones.salmon : tones.amber;
+                    const tone =
+                      f.level === 'High'
+                        ? tones.salmon
+                        : f.level === 'Moderate'
+                        ? tones.amber
+                        : tones.beige;
                     const isFocused = focused === f.key;
                     return (
                       <View
@@ -346,7 +344,7 @@ export default function AlertConfigurationScreen() {
                             editable={!saving}
                             maxLength={5}
                           />
-                          <Text style={styles.unit}>{section.unit}</Text>
+                          <Text style={styles.unit}>{f.unit || section.unit}</Text>
                         </View>
                       </View>
                     );
@@ -360,9 +358,11 @@ export default function AlertConfigurationScreen() {
         <View style={[styles.notice, styles.noticeBottom, { backgroundColor: tones.beige.bg }]}>
           <Icon name="information-circle" size={18} color={tones.beige.text} />
           <Text style={[styles.noticeText, { color: tones.beige.text }]}>
-            System alert settings, not veterinary limits. Which breeds are at higher
-            risk is based on Hall, Carter & O'Neill (2020). How much earlier each level
-            warns was set by the team and should be checked with a vet.
+            System alert settings, not veterinary limits. Too hot: the collar surface
+            nearing normal core temperature (37.5–39.2 °C). Too humid: above 80 %,
+            panting stops cooling dogs (Bruchim et al., 2017). Higher-risk breeds:
+            Hall, Carter & O'Neill (2020). Only High risk that lasts a few minutes
+            sends a notification (at most once an hour per dog).
           </Text>
         </View>
 

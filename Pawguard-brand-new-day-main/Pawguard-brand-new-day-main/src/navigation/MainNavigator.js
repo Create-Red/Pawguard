@@ -4,6 +4,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import CustomTabBar from '../components/CustomTabBar';
+import PrivacyConsentGate from '../components/PrivacyConsentGate';
+import PrivacyPolicyScreen from '../screens/main/PrivacyPolicyScreen';
 import { stackScreenOptions, tabScreenOptions } from './navOptions';
 import { useAuth } from '../context/AuthContext';
 import useUnreadCount from '../utils/useUnreadCount';
@@ -73,6 +75,9 @@ function MainTabs() {
 
 export default function MainNavigator() {
   return (
+    <>
+    {/* Asks for privacy consent once (and again if the notice changes) */}
+    <PrivacyConsentGate />
     <Stack.Navigator screenOptions={stackScreenOptions}>
       <Stack.Screen
         name="MainTabs"
@@ -122,6 +127,12 @@ export default function MainNavigator() {
         component={PublicEventDetailsScreen}
         options={{ title: 'Event Details' }}
       />
+      <Stack.Screen
+        name="PrivacyPolicy"
+        component={PrivacyPolicyScreen}
+        options={{ title: 'Privacy' }}
+      />
     </Stack.Navigator>
+    </>
   );
 }

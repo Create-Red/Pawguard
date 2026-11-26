@@ -18,6 +18,7 @@ import * as ImagePicker from 'expo-image-picker';
 
 import BreedPicker from '../../components/BreedPicker';
 import Icon from '../../components/Icon';
+import SuccessCelebration from '../../components/SuccessCelebration';
 import { supabase } from '../../config/supabase';
 import { useAuth } from '../../context/AuthContext';
 import { colors, fonts, tones } from '../../Theme';
@@ -57,6 +58,7 @@ export default function RegisterPetScreen({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [errorField, setErrorField] = useState(null); // 'name' | 'age' | 'weight' | null
+  const [newDog, setNewDog] = useState(null); // shows the cheer pop-up
 
   const showError = (message, field = null) => {
     setError(message);
@@ -189,11 +191,7 @@ export default function RegisterPetScreen({ navigation }) {
         throw insertError;
       }
 
-      Alert.alert(
-        'Pet registered',
-        `${data.name} has been added to PawGuard.`,
-        [{ text: 'OK', onPress: () => navigation.goBack() }]
-      );
+      setNewDog(data);
     } catch (e) {
       console.error('REGISTER PET ERROR:', e);
       showError(e.message || 'Unable to register your pet.');
@@ -368,6 +366,23 @@ export default function RegisterPetScreen({ navigation }) {
           <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <SuccessCelebration
+        visible={!!newDog}
+        title={`${newDog?.name || 'Your pet'} is registered!`}
+        message="Pair a PawGuard collar so we can watch for heat and send alerts."
+        primaryLabel="Pair collar now"
+        onPrimary={() => {
+          const dog = newDog;
+          setNewDog(null);
+          navigation.replace('PairDevice', { dogId: dog.id, dogName: dog.name });
+        }}
+        secondaryLabel="Later"
+        onSecondary={() => {
+          setNewDog(null);
+          navigation.goBack();
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }

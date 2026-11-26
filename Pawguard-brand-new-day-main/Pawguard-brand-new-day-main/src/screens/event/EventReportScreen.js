@@ -17,6 +17,7 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 
 import { supabase } from '../../config/supabase';
+import Mascot, { MascotLoader } from '../../components/Mascot';
 import { colors, fonts, tones } from '../../Theme';
 import { fmtDateTime, fmtTime, shareReportPdf, summarize } from '../../utils/eventReportPdf';
 
@@ -90,15 +91,14 @@ export default function EventReportScreen({ route }) {
 
   if (loading) {
     return (
-      <View style={styles.center}>
-        <ActivityIndicator size="large" color={colors.ink} />
-      </View>
+      <MascotLoader text="Putting the report together" />
     );
   }
 
   if (error || !report) {
     return (
       <View style={styles.center}>
+        <Mascot pose="sad" size={170} animation="droop" />
         <Text style={styles.errorTitle}>Report unavailable</Text>
         <Text style={styles.errorText}>{error || 'This event could not be loaded.'}</Text>
       </View>

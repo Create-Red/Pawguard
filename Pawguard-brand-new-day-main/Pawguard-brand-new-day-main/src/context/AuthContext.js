@@ -126,6 +126,7 @@ export function AuthProvider({ children }) {
         profile,
         loading,
         signOut,
+        refreshProfile: () => loadProfile(session?.user?.id),
       }}
     >
       {children}

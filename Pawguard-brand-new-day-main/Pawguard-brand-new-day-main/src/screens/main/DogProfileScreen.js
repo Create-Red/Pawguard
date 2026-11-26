@@ -65,7 +65,7 @@ export default function DogProfileScreen({ route, navigation }) {
 
       const { data: deviceData, error: deviceError } = await supabase
         .from('devices')
-        .select('id, device_uid, status, firmware_version, battery_pct')
+        .select('id, device_uid, status, firmware_version')
         .eq('dog_id', dogId)
         .maybeSingle();
 
@@ -247,10 +247,9 @@ export default function DogProfileScreen({ route, navigation }) {
       {device ? (
         <>
           <InfoRow label="Device ID" value={device.device_uid} />
-          <InfoRow label="Status" value={device.status || 'Unknown'} />
           <InfoRow
-            label="Battery"
-            value={device.battery_pct != null ? `${device.battery_pct}%` : '--'}
+            label="Status"
+            value={device.status || 'Unknown'}
             last={!device.firmware_version}
           />
           {!!device.firmware_version && (

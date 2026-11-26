@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "pawguard-app",
+    "name": "PawGuard",
     "slug": "pawguard-app",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -10,9 +10,12 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.pawguard.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "monochromeImage": "./assets/monochrome-icon.png",
+        "backgroundColor": "#E2F3E0"
       }
     },
     "web": {
@@ -23,7 +26,24 @@
       "expo-notifications",
       "@react-native-community/datetimepicker",
       "expo-font",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 220,
+          "resizeMode": "contain",
+          "backgroundColor": "#FFFFFF"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraProguardRules": "-keep class androidx.work.** { *; }\n-keep class * extends androidx.room.RoomDatabase { *; }\n-keep class androidx.room.** { *; }"
+          }
+        }
+      ]
     ],
     "extra": {
       "eas": {

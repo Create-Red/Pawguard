@@ -24,8 +24,50 @@ const formatRole = (role) => {
   return text.charAt(0).toUpperCase() + text.slice(1);
 };
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ navigation }) {
   const { profile, signOut } = useAuth();
+  const [deleting, setDeleting] = useState(false);
+
+  // Data Privacy Act: the right to erasure
+  const deleteAccount = async () => {
+    setDeleting(true);
+    try {
+      // 1) Photos in storage (each user has their own folder)
+      for (const bucket of ['dog-photos', 'avatars']) {
+        const { data: files } = await supabase.storage.from(bucket).list(profile.id, { limit: 1000 });
+        if (files?.length) {
+          await supabase.storage.from(bucket).remove(files.map((f) => `${profile.id}/${f.name}`));
+        }
+      }
+      // 2) Everything else, and the login
+      const { error } = await supabase.rpc('delete_my_account');
+      if (error) throw error;
+      await signOut();
+      Alert.alert('Account deleted', 'Your account and your data have been erased.');
+    } catch (e) {
+      Alert.alert('Could not delete account', e.message || 'Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const confirmDeleteAccount = () =>
+    Alert.alert(
+      'Delete your account?',
+      'This erases your profile, pets, readings, alerts and event sign-ups for good. Your collar is released so it can be used again. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () =>
+            Alert.alert('Are you sure?', 'All your PawGuard data will be gone.', [
+              { text: 'Keep my account', style: 'cancel' },
+              { text: 'Yes, delete everything', style: 'destructive', onPress: deleteAccount },
+            ]),
+        },
+      ]
+    );
 
   const tone = tones.brand;
 
@@ -206,6 +248,32 @@ export default function SettingsScreen() {
         )}
       </View>
 
+      {/* Privacy & data */}
+      <Text style={styles.groupTitle}>Privacy & data</Text>
+      <TouchableOpacity
+        style={styles.row}
+        onPress={() => navigation.navigate('PrivacyPolicy')}
+        accessibilityRole="button"
+      >
+        <Text style={styles.rowText}>Privacy notice</Text>
+        <Icon name="chevron-forward" size={18} color={colors.muted} />
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.row, styles.rowLast]}
+        onPress={confirmDeleteAccount}
+        disabled={deleting}
+        accessibilityRole="button"
+      >
+        <Text style={[styles.rowText, { color: colors.danger }]}>
+          {deleting ? 'Deleting your account…' : 'Delete my account'}
+        </Text>
+        {deleting ? (
+          <ActivityIndicator size="small" color={colors.danger} />
+        ) : (
+          <Icon name="chevron-forward" size={18} color={colors.muted} />
+        )}
+      </TouchableOpacity>
+
       <TouchableOpacity style={styles.logout} onPress={handleSignOut}>
         <Text style={styles.logoutText}>Sign out</Text>
       </TouchableOpacity>
@@ -334,6 +402,26 @@ const styles = StyleSheet.create({
   dimmed: {
     opacity: 0.5,
   },
+
+  groupTitle: {
+    fontFamily: fonts.semibold,
+    fontSize: 16,
+    color: colors.ink,
+    marginTop: 28,
+    marginBottom: 4,
+    paddingHorizontal: 2,
+  },
+  row: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 2,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.line,
+  },
+  rowLast: { borderBottomWidth: 0 },
+  rowText: { fontFamily: fonts.medium, fontSize: 15, color: colors.ink },
 
   logout: {
     height: 56,

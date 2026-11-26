@@ -9,7 +9,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import OsmMap from '../../components/OsmMap';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -142,7 +142,6 @@ const toItem = (row) => {
     name: row.dog_name || 'Dog',
     breed: row.breed,
     ownerName: row.owner_name,
-    battery: row.battery_pct,
     checkedIn: !!row.checked_in_at,
     sensor,
     lastMs,
@@ -354,17 +353,8 @@ export default function EventMonitoringScreen({ route, navigation }) {
     const coords = withGps.map((d) => d.gps);
     if (!mapRef.current || coords.length === 0) return;
 
-    if (coords.length === 1) {
-      mapRef.current.animateToRegion(
-        { ...coords[0], latitudeDelta: 0.01, longitudeDelta: 0.01 },
-        400
-      );
-    } else {
-      mapRef.current.fitToCoordinates(coords, {
-        edgePadding: { top: 80, right: 60, bottom: 280, left: 60 },
-        animated: true,
-      });
-    }
+    // Leave room for the bottom panel
+    mapRef.current.fitAll(coords, { top: 80, right: 60, bottom: 280, left: 60 });
   }, [withGps]);
 
   // Fit the map to all dogs the first time it has something to show
@@ -378,12 +368,10 @@ export default function EventMonitoringScreen({ route, navigation }) {
   const showOnMap = (item) => {
     setSelectedId(item.id);
     setView('map');
+    // Wait for the map to open, then zoom to the dog
     setTimeout(() => {
-      mapRef.current?.animateToRegion(
-        { ...item.gps, latitudeDelta: 0.005, longitudeDelta: 0.005 },
-        400
-      );
-    }, 350);
+      mapRef.current?.flyTo(item.gps, 17);
+    }, 600);
   };
 
   // ---- Check-in -----------------------------------------------------------
@@ -439,12 +427,9 @@ export default function EventMonitoringScreen({ route, navigation }) {
         <Tiles sensor={item.sensor} dim={!isOnline} />
 
         <View style={styles.cardBottom}>
-          <View style={styles.battery}>
-            <Icon name="battery-half" size={16} color={tone.sub} />
-            <Text style={[styles.batteryText, { color: tone.sub }]}>
-              {item.battery != null ? `${Number(item.battery)}%` : '--'}
-            </Text>
-          </View>
+          <Text style={[styles.checkInNote, { color: tone.sub }]}>
+            {item.checkedIn ? 'At the venue' : 'Not checked in'}
+          </Text>
 
           {item.gps ? (
             <TouchableOpacity
@@ -594,28 +579,21 @@ export default function EventMonitoringScreen({ route, navigation }) {
         />
       ) : (
         <View style={styles.mapWrap}>
-          <MapView
+          <OsmMap
             ref={mapRef}
             style={StyleSheet.absoluteFill}
-            onPress={() => setSelectedId(null)}
-            initialRegion={
-              withGps[0]
-                ? { ...withGps[0].gps, latitudeDelta: 0.02, longitudeDelta: 0.02 }
-                : undefined
-            }
-          >
-            {withGps.map((item) => (
-              <Marker
-                key={item.id}
-                coordinate={item.gps}
-                pinColor={pinColorFor(item)}
-                onPress={(e) => {
-                  e.stopPropagation?.();
-                  setSelectedId(item.id);
-                }}
-              />
-            ))}
-          </MapView>
+            center={withGps[0]?.gps}
+            zoom={15}
+            markers={withGps.map((item) => ({
+              id: item.id,
+              latitude: item.gps.latitude,
+              longitude: item.gps.longitude,
+              color: pinColorFor(item),
+              title: item.name,
+            }))}
+            onMarkerPress={(id) => setSelectedId(id)}
+            onMapPress={() => setSelectedId(null)}
+          />
 
           {/* Fit all dogs */}
           {withGps.length > 0 && (
@@ -889,8 +867,7 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingHorizontal: 2,
   },
-  battery: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  batteryText: { fontFamily: fonts.medium, fontSize: 13 },
+  checkInNote: { fontFamily: fonts.medium, fontSize: 13 },
   locationButton: {
     flexDirection: 'row',
     alignItems: 'center',

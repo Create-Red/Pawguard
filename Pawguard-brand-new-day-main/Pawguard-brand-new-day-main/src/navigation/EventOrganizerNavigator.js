@@ -4,6 +4,8 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 import CustomTabBar from '../components/CustomTabBar';
+import PrivacyConsentGate from '../components/PrivacyConsentGate';
+import PrivacyPolicyScreen from '../screens/main/PrivacyPolicyScreen';
 import { stackScreenOptions, tabScreenOptions } from './navOptions';
 import { useAuth } from '../context/AuthContext';
 import { registerForPushNotifications } from '../utils/registerForPush';
@@ -76,6 +78,9 @@ export default function EventOrganizerNavigator() {
   }, [profile?.id]);
 
   return (
+    <>
+    {/* Asks for privacy consent once (and again if the notice changes) */}
+    <PrivacyConsentGate />
     <Stack.Navigator screenOptions={stackScreenOptions}>
       <Stack.Screen
         name="OrganizerTabs"
@@ -118,6 +123,12 @@ export default function EventOrganizerNavigator() {
         component={EventMonitoringScreen}
         options={{ title: 'Event Monitoring' }}
       />
+      <Stack.Screen
+        name="PrivacyPolicy"
+        component={PrivacyPolicyScreen}
+        options={{ title: 'Privacy' }}
+      />
     </Stack.Navigator>
+    </>
   );
 }

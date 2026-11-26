@@ -1,9 +1,13 @@
 import { Platform } from 'react-native';
 import * as Device from 'expo-device';
 import * as Notifications from 'expo-notifications';
-import Constants from 'expo-constants';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 import { supabase } from '../config/supabase';
+
+// This phone's own token, remembered so logout only removes THIS phone
+const TOKEN_KEY = 'pawguard.pushToken';
 
 // Show notifications as a banner even when the app is open
 Notifications.setNotificationHandler({
@@ -25,13 +29,19 @@ Notifications.setNotificationHandler({
 export async function registerForPushNotifications(userId) {
   if (!userId) return null;
 
-  // Push only works on a real phone, not an emulator/simulator
-  if (!Device.isDevice) {
-    console.log('Push notifications need a physical device.');
+  // The iPhone simulator can't get push. The Android emulator can,
+  // if it has Google Play.
+  if (!Device.isDevice && Platform.OS === 'ios') {
+    console.log('Push notifications need a real iPhone.');
     return null;
   }
 
-  if (Platform.OS === 'android' && Constants.expoGoConfig) {
+  // Only Expo Go itself can't get Android push. (expoGoConfig is also set in
+  // our own APK, so it can't be used for this check.)
+  if (
+    Platform.OS === 'android' &&
+    Constants.executionEnvironment === ExecutionEnvironment.StoreClient
+  ) {
     console.log('Remote push notifications require an Android development build.');
     return null;
   }
@@ -82,6 +92,10 @@ export async function registerForPushNotifications(userId) {
       return null;
     }
 
+    try {
+      await AsyncStorage.setItem(TOKEN_KEY, token);
+    } catch {}
+
     return token;
   } catch (error) {
     console.warn('Push notification registration failed:', error);
@@ -91,11 +105,18 @@ export async function registerForPushNotifications(userId) {
 
 /**
  * Call BEFORE signing out (the user must still be logged in).
- * Stops this account's alerts from going to this phone.
+ * Stops this account's alerts from going to THIS phone. If the account's
+ * token belongs to another phone, it is left alone.
  */
 export async function unregisterPushNotifications() {
   try {
-    const { error } = await supabase.rpc('clear_my_push_token');
+    let token = null;
+    try {
+      token = await AsyncStorage.getItem(TOKEN_KEY);
+    } catch {}
+    if (!token) return; // this phone never registered
+
+    const { error } = await supabase.rpc('clear_my_push_token', { p_token: token });
     if (error) console.log('Clearing push token failed:', error.message);
   } catch (error) {
     console.log('Clearing push token failed:', error);

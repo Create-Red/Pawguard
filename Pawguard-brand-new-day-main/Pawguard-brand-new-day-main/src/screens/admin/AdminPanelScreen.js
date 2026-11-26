@@ -34,7 +34,7 @@ const MODULES = [
     icon: 'hardware-chip',
     tone: 'green',
     title: 'Device monitoring',
-    text: 'Battery, status and last contact',
+    text: 'Status and last contact',
   },
   {
     route: 'RegisterDevices',

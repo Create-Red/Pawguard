@@ -50,6 +50,85 @@ const timeAgo = (value) => {
   });
 };
 
+const ERASED = 'Details removed (account deleted)';
+
+// Friendly names for fields stored in log details
+const FIELD_LABELS = {
+  name: 'Name',
+  breed: 'Breed',
+  age: 'Age',
+  weight_kg: 'Weight (kg)',
+  venue: 'Venue',
+  starts_at: 'Starts',
+  ends_at: 'Ends',
+  status: 'Status',
+  device_uid: 'Collar ID',
+  role: 'Role',
+  risk_tier: 'Risk group',
+  is_archived: 'Archived',
+  checked_in_at: 'Checked in',
+  photo_url: 'Photo',
+  avatar_url: 'Profile photo',
+  vet_phone: 'Vet number',
+  dog_id: 'Paired pet',
+  owner_id: 'Owner',
+  organizer_id: 'Organizer',
+  max_temp: 'Max temperature',
+  max_heart_rate: 'Max heart rate',
+  max_humidity: 'Max humidity',
+  privacy_version: 'Privacy notice version',
+  privacy_accepted_at: 'Privacy accepted',
+};
+
+const labelFor = (key) =>
+  FIELD_LABELS[key] ||
+  key.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+
+const isId = (key) => key === 'id' || key.endsWith('_id');
+const isTime = (key) => key.endsWith('_at');
+
+const formatValue = (key, value) => {
+  if (value === null || value === undefined || value === '') return 'none';
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (key.endsWith('_url')) return 'photo';
+  if (isTime(key)) {
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleString([], {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+    }
+  }
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value).replace(/_/g, ' ');
+};
+
+// details -> [{ label, text }]
+//   UPDATE:        { field: { from, to } }  -> "8 → 9.5"
+//   INSERT/DELETE: { field: value }         -> "Bantay"
+const detailLines = (log) => {
+  const d = log.details;
+  if (!d || typeof d !== 'object') return [];
+  return Object.entries(d).map(([key, value]) => {
+    const isChange = value && typeof value === 'object' && ('from' in value || 'to' in value);
+    if (isChange) {
+      if (isId(key)) {
+        const text = value.to == null ? 'removed' : value.from == null ? 'set' : 'changed';
+        return { key, label: labelFor(key), text };
+      }
+      return {
+        key,
+        label: labelFor(key),
+        text: `${formatValue(key, value.from)}  →  ${formatValue(key, value.to)}`,
+      };
+    }
+    return { key, label: labelFor(key), text: formatValue(key, value) };
+  });
+};
+
 // "event_members" -> "Event members"
 const prettyTable = (name) => {
   const text = (name || 'unknown').replace(/_/g, ' ');
@@ -97,9 +176,13 @@ export default function SystemLogsScreen() {
     const matchesFilter = filter === 'ALL' || log.action === filter;
     const matchesSearch =
       !query ||
-      [log.summary, log.table_name, log.action, log.profiles?.name].some((v) =>
-        v?.toLowerCase().includes(query)
-      );
+      [
+        log.summary,
+        log.table_name,
+        log.action,
+        log.profiles?.name,
+        log.details ? JSON.stringify(log.details) : null,
+      ].some((v) => v?.toLowerCase().includes(query));
     return matchesFilter && matchesSearch;
   });
 
@@ -107,6 +190,9 @@ export default function SystemLogsScreen() {
     const a = ACTION_STYLE[item.action] || DEFAULT_ACTION;
     const tone = tones[a.tone];
     const open = expandedId === item.id;
+    const erased = item.summary === ERASED;
+    const lines = erased ? [] : detailLines(item);
+    const actor = item.profiles?.name || (erased ? 'Deleted user' : 'System');
 
     return (
       <TouchableOpacity
@@ -131,26 +217,63 @@ export default function SystemLogsScreen() {
                 {a.label}
               </Text>
             </View>
+            {erased && (
+              <View style={[styles.pill, { backgroundColor: tones.beige.pill }]}>
+                <Text style={[styles.pillText, { color: tones.beige.pillText }]}>
+                  Erased
+                </Text>
+              </View>
+            )}
           </View>
 
-          <Text style={styles.summary} numberOfLines={open ? undefined : 2}>
-            {item.summary || 'No description'}
+          <Text
+            style={[styles.summary, erased && styles.summaryErased]}
+            numberOfLines={open ? undefined : 2}
+          >
+            {erased
+              ? 'Details removed because the account was deleted'
+              : item.summary || `${a.label} in ${prettyTable(item.table_name).toLowerCase()}`}
           </Text>
 
           <Text style={styles.meta} numberOfLines={1}>
-            {item.profiles?.name || 'System'}  ·  {timeAgo(item.created_at)}
+            {actor}  ·  {timeAgo(item.created_at)}
           </Text>
 
           {open && (
             <View style={styles.details}>
-              <Text style={styles.detailText}>
-                Record ID: {item.record_id || 'N/A'}
-              </Text>
-              <Text style={styles.detailText}>
-                {item.created_at
-                  ? new Date(item.created_at).toLocaleString()
-                  : 'Unknown date'}
-              </Text>
+              {erased ? (
+                <Text style={styles.detailNote}>
+                  This user deleted their account, so their name and details were removed
+                  (Data Privacy Act). Only the action and time are kept.
+                </Text>
+              ) : lines.length > 0 ? (
+                <>
+                  <Text style={styles.detailHeading}>
+                    {item.action === 'UPDATE' ? 'What changed' : 'Details'}
+                  </Text>
+                  {lines.map((l) => (
+                    <View key={l.key} style={styles.detailRow}>
+                      <Text style={styles.detailLabel}>{l.label}</Text>
+                      <Text style={styles.detailValue}>{l.text}</Text>
+                    </View>
+                  ))}
+                </>
+              ) : (
+                <Text style={styles.detailNote}>No extra details for this activity.</Text>
+              )}
+
+              <View style={styles.detailFooter}>
+                <Text style={styles.detailText}>
+                  {item.created_at
+                    ? new Date(item.created_at).toLocaleString()
+                    : 'Unknown date'}
+                </Text>
+                {!!item.record_id && (
+                  <Text style={styles.detailText} numberOfLines={1}>
+                    Record ID: {item.record_id}
+                  </Text>
+                )}
+              </View>
             </View>
           )}
         </View>
@@ -319,6 +442,19 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   detailText: { fontFamily: fonts.regular, fontSize: 12, color: colors.tileLabel },
+  summaryErased: { fontStyle: 'italic', color: colors.muted, opacity: 1 },
+  detailHeading: { fontFamily: fonts.medium, fontSize: 13, color: colors.ink, marginBottom: 4 },
+  detailRow: { flexDirection: 'row', gap: 10, paddingVertical: 2 },
+  detailLabel: { width: 110, fontFamily: fonts.regular, fontSize: 13, color: colors.muted },
+  detailValue: { flex: 1, fontFamily: fonts.medium, fontSize: 13, color: colors.ink },
+  detailNote: { fontFamily: fonts.regular, fontSize: 13, lineHeight: 19, color: colors.ink },
+  detailFooter: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.line,
+    gap: 2,
+  },
 
   emptyText: {
     fontFamily: fonts.regular,

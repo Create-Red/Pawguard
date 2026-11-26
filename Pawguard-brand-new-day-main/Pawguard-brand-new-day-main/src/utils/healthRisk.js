@@ -5,51 +5,48 @@
 //   elevated -> e.g. Golden Retriever, Great Dane
 //   high     -> e.g. Pug, Shih Tzu, Bulldog
 // Dogs with no breed picked use "normal".
+//
+// Rules (same as the server, supabase_dog_heat_alerts.sql). The collar's
+// own readings decide the risk:
+//   Too hot   = collar surface at/above the limits
+//               (skin close to core temperature = the dog can't shed heat)
+//   Too humid = humidity >= moderate_humidity (80 %): panting stops cooling.
+//               Moderate on its own, High if the collar surface is also warm.
+//   Too cold  = air temperature at/below the limits
+//   Humidity below the limit and dry air don't change the level.
 
 const KEYS = [
-  'moderate_surface_temp',
+  'moderate_surface_temp', // collar surface: "too hot"
   'high_surface_temp',
-  'low_surface_temp_moderate',
-  'low_surface_temp_high',
-  'moderate_humidity',
-  'high_humidity',
-  'low_humidity_moderate',
-  'low_humidity_high',
+  'moderate_humidity', // "too humid" limit (panting stops working)
+  'low_ambient_temp_moderate', // "too cold" uses the AIR temperature
+  'low_ambient_temp_high',
 ];
 
 export const RISK_TIERS = ['normal', 'elevated', 'high'];
 
-// Used only if Supabase cannot be reached. Same as the SQL starting values.
+// Used only if Supabase cannot be reached. Same as the SQL values.
 export const DEFAULT_THRESHOLDS = {
   normal: {
-    moderate_surface_temp: 39,
+    moderate_surface_temp: 37,
     high_surface_temp: 40,
-    low_surface_temp_moderate: 36,
-    low_surface_temp_high: 35,
-    moderate_humidity: 70,
-    high_humidity: 80,
-    low_humidity_moderate: 45,
-    low_humidity_high: 35,
+    moderate_humidity: 80,
+    low_ambient_temp_moderate: 7,
+    low_ambient_temp_high: 0,
   },
   elevated: {
-    moderate_surface_temp: 38.5,
+    moderate_surface_temp: 37,
     high_surface_temp: 39.5,
-    low_surface_temp_moderate: 36,
-    low_surface_temp_high: 35,
-    moderate_humidity: 65,
-    high_humidity: 75,
-    low_humidity_moderate: 45,
-    low_humidity_high: 35,
+    moderate_humidity: 80,
+    low_ambient_temp_moderate: 7,
+    low_ambient_temp_high: 0,
   },
   high: {
-    moderate_surface_temp: 38,
+    moderate_surface_temp: 37,
     high_surface_temp: 39,
-    low_surface_temp_moderate: 36,
-    low_surface_temp_high: 35,
-    moderate_humidity: 60,
-    high_humidity: 70,
-    low_humidity_moderate: 45,
-    low_humidity_high: 35,
+    moderate_humidity: 80,
+    low_ambient_temp_moderate: 7,
+    low_ambient_temp_high: 0,
   },
 };
 
@@ -124,73 +121,58 @@ export async function loadAlertThresholds(supabase) {
   return true;
 }
 
-// Calculate the dog's environmental risk level.
-// tier is optional. If left out, it is taken from:
-//   sensor.risk_tier -> the remembered level of sensor.dog_id -> 'normal'
-export function calculateHealthRisk(sensor, tier) {
-  if (!sensor) {
-    return 'UNKNOWN';
-  }
+const num = (v) => (v == null || v === '' ? NaN : Number(v));
 
-  const surfaceTemp = Number(sensor.surface_temp);
-  const humidity = Number(sensor.humidity);
-
-  if (
-    sensor.surface_temp == null ||
-    sensor.humidity == null ||
-    !Number.isFinite(surfaceTemp) ||
-    !Number.isFinite(humidity)
-  ) {
-    return 'UNKNOWN';
-  }
+// Everything the rules need from one reading
+function evaluate(sensor, tier) {
+  const surface = num(sensor.surface_temp);
+  const humidity = num(sensor.humidity);
+  const air = num(sensor.ambient_temp);
 
   const level = cleanTier(
     tier || sensor.risk_tier || (sensor.dog_id ? getDogTier(sensor.dog_id) : 'normal')
   );
   const t = activeThresholds[level];
+  const at = (v, limit) => Number.isFinite(v) && v >= limit; // missing value = false
+  const below = (v, limit) => Number.isFinite(v) && v <= limit;
 
-  // HIGH RISK
-  if (
-    surfaceTemp >= t.high_surface_temp ||
-    surfaceTemp <= t.low_surface_temp_high ||
-    humidity >= t.high_humidity ||
-    humidity <= t.low_humidity_high
-  ) {
-    return 'HIGH';
-  }
+  return {
+    known: Number.isFinite(surface) || Number.isFinite(humidity) || Number.isFinite(air),
+    hotHigh: at(surface, t.high_surface_temp),
+    warm: at(surface, t.moderate_surface_temp),
+    humid: at(humidity, t.moderate_humidity),
+    coldHigh: below(air, t.low_ambient_temp_high),
+    coldModerate: below(air, t.low_ambient_temp_moderate),
+  };
+}
 
-  // MODERATE RISK
-  if (
-    surfaceTemp >= t.moderate_surface_temp ||
-    surfaceTemp <= t.low_surface_temp_moderate ||
-    humidity >= t.moderate_humidity ||
-    humidity <= t.low_humidity_moderate
-  ) {
-    return 'MODERATE';
-  }
+// Calculate the dog's environmental risk level.
+// tier is optional. If left out, it is taken from:
+//   sensor.risk_tier -> the remembered level of sensor.dog_id -> 'normal'
+export function calculateHealthRisk(sensor, tier) {
+  if (!sensor) return 'UNKNOWN';
+  const e = evaluate(sensor, tier);
+  if (!e.known) return 'UNKNOWN';
 
-  // NORMAL
-  return 'LOW';
+  let lvl = 0;
+  if (e.hotHigh || e.coldHigh) lvl = 2;
+  else if (e.warm || e.coldModerate) lvl = 1;
+
+  // Very humid air: panting can't cool the dog (High if it is also warm)
+  if (e.humid) lvl = Math.max(lvl, e.warm ? 2 : 1);
+
+  return ['LOW', 'MODERATE', 'HIGH'][lvl];
 }
 
 // Why is the dog at risk? Returns e.g. ['too hot', 'too humid'], or [] if fine.
-// Uses the same limits as calculateHealthRisk.
 export function getRiskReasons(sensor, tier) {
   const level = calculateHealthRisk(sensor, tier);
   if (level !== 'HIGH' && level !== 'MODERATE') return [];
-
-  const surfaceTemp = Number(sensor.surface_temp);
-  const humidity = Number(sensor.humidity);
-  const t = activeThresholds[
-    cleanTier(tier || sensor.risk_tier || (sensor.dog_id ? getDogTier(sensor.dog_id) : 'normal'))
-  ];
-
-  const high = level === 'HIGH';
+  const e = evaluate(sensor, tier);
   const reasons = [];
-  if (surfaceTemp >= (high ? t.high_surface_temp : t.moderate_surface_temp)) reasons.push('too hot');
-  if (surfaceTemp <= (high ? t.low_surface_temp_high : t.low_surface_temp_moderate)) reasons.push('too cold');
-  if (humidity >= (high ? t.high_humidity : t.moderate_humidity)) reasons.push('too humid');
-  if (humidity <= (high ? t.low_humidity_high : t.low_humidity_moderate)) reasons.push('too dry');
+  if (e.warm) reasons.push('too hot');
+  if (e.humid) reasons.push('too humid');
+  if (e.coldModerate) reasons.push('too cold');
   return reasons;
 }
 

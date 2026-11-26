@@ -7,7 +7,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 
-import MapView, { Marker } from 'react-native-maps';
+import OsmMap from '../../components/OsmMap';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Icon from '../../components/Icon';
 import Glass from '../../components/Glass';
@@ -146,22 +146,20 @@ export default function MapScreen({ route }) {
 
   return (
     <View style={styles.container}>
-      <MapView
+      <OsmMap
         style={styles.map}
-        initialRegion={{
-          latitude,
-          longitude,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }}
-      >
-        <Marker
-          coordinate={{ latitude, longitude }}
-          title={dog?.name || 'Your Dog'}
-          description="PawGuard GPS location"
-          pinColor={colors.accent}
-        />
-      </MapView>
+        center={{ latitude, longitude }}
+        zoom={16}
+        markers={[
+          {
+            id: 'dog',
+            latitude,
+            longitude,
+            color: colors.accent,
+            title: dog?.name || 'Your Dog',
+          },
+        ]}
+      />
 
       {/* Bottom pastel panel */}
       <Glass radius={30} intensity={60} style={StyleSheet.flatten([styles.infoPanel, { bottom: 20 + insets.bottom }])}>

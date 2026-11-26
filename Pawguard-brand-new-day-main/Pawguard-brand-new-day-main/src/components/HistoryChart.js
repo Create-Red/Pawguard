@@ -41,10 +41,8 @@ function limitsFor(metric, t) {
     ];
   }
   if (metric === 'humidity') {
-    return [
-      { v: t.moderate_humidity, label: 'Moderate', color: tones.amber.pillText },
-      { v: t.high_humidity, label: 'High', color: colors.danger },
-    ];
+    // At this line panting stops cooling the dog ("too humid")
+    return [{ v: t.moderate_humidity, label: 'Too humid', color: tones.amber.pillText }];
   }
   return [];
 }
