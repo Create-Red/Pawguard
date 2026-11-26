@@ -111,7 +111,9 @@ export function AuthProvider({ children }) {
     // If it fails (e.g. no internet), logout still continues.
     await unregisterPushNotifications();
 
-    const { error } = await supabase.auth.signOut();
+    // 'local' = log out only this phone. The same account stays logged in
+    // (and keeps getting alerts) on the user's other phones.
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
 
     if (error) {
       console.log('SIGN OUT ERROR:', error.message);
